@@ -11,6 +11,18 @@ export default defineNuxtConfig({
   },
 
   css: ['~/assets/css/main.css'],
+  runtimeConfig: {
+    supabase: {
+      url: import.meta.env.SUPABASE_URL || '',
+      serviceRoleKey: import.meta.env.SUPABASE_SERVICE_ROLE_KEY || '',
+      avatarBucket: import.meta.env.SUPABASE_AVATAR_BUCKET || 'customer-avatars',
+      passportBucket: import.meta.env.SUPABASE_PASSPORT_BUCKET || 'customer-passports'
+    },
+    public: {
+      supabaseUrl: import.meta.env.NUXT_PUBLIC_SUPABASE_URL || import.meta.env.SUPABASE_URL || '',
+      supabaseAnonKey: import.meta.env.NUXT_PUBLIC_SUPABASE_ANON_KEY || ''
+    }
+  },
 
   routeRules: {
     '/api/**': {

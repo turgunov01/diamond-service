@@ -1,39 +1,60 @@
 <script setup lang="ts">
 withDefaults(defineProps<{
   count?: number
+  loading?: boolean
 }>(), {
-  count: 0
+  count: 0,
+  loading: false
 })
+
+const emit = defineEmits<{
+  confirm: []
+}>()
 
 const open = ref(false)
 
-async function onSubmit() {
-  await new Promise(resolve => setTimeout(resolve, 1000))
+function customerWord(count: number) {
+  const mod10 = count % 10
+  const mod100 = count % 100
+
+  if (mod10 === 1 && mod100 !== 11) {
+    return 'клиента'
+  }
+
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return 'клиента'
+  }
+
+  return 'клиентов'
+}
+
+function onSubmit() {
   open.value = false
+  emit('confirm')
 }
 </script>
 
 <template>
   <UModal
     v-model:open="open"
-    :title="`Delete ${count} customer${count > 1 ? 's' : ''}`"
-    :description="`Are you sure, this action cannot be undone.`"
+    :title="`Удалить ${count} ${customerWord(count)}`"
+    :description="`Вы уверены? Это действие нельзя отменить.`"
   >
     <slot />
 
     <template #body>
       <div class="flex justify-end gap-2">
         <UButton
-          label="Cancel"
+          label="Отмена"
           color="neutral"
           variant="subtle"
           @click="open = false"
         />
         <UButton
-          label="Delete"
+          label="Удалить"
           color="error"
           variant="solid"
-          loading-auto
+          :loading="loading"
           @click="onSubmit"
         />
       </div>

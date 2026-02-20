@@ -1,68 +1,68 @@
 <script setup lang="ts">
-import type { NavigationMenuItem } from "@nuxt/ui";
+import type { NavigationMenuItem } from '@nuxt/ui'
 
-const route = useRoute();
-const toast = useToast();
+const route = useRoute()
+const toast = useToast()
 
-const open = ref(false);
+const open = ref(false)
 
 const { data: links } = await useFetch<NavigationMenuItem[][]>(
-  "/api/routes/sidebar",
+  '/api/routes/sidebar',
   {
-    default: () => [[], []] as NavigationMenuItem[][],
+    default: () => [[], []] as NavigationMenuItem[][]
   }
-);
+)
 
 const groups = computed(() => [
   {
-    id: "links",
-    label: "Go to",
-    items: (links.value ?? []).flat(),
+    id: 'links',
+    label: 'Перейти',
+    items: (links.value ?? []).flat()
   },
   {
-    id: "code",
-    label: "Code",
+    id: 'code',
+    label: 'Код',
     items: [
       {
-        id: "source",
-        label: "View page source",
-        icon: "i-simple-icons-github",
+        id: 'source',
+        label: 'Открыть исходник страницы',
+        icon: 'i-simple-icons-github',
         to: `https://github.com/nuxt-ui-templates/dashboard/blob/main/app/pages${
-          route.path === "/" ? "/index" : route.path
+          route.path === '/' ? '/index' : route.path
         }.vue`,
-        target: "_blank",
-      },
-    ],
-  },
-]);
+        target: '_blank'
+      }
+    ]
+  }
+])
 
 onMounted(async () => {
-  const cookie = useCookie("cookie-consent");
-  if (cookie.value === "accepted") {
-    return;
+  const cookie = useCookie('cookie-consent')
+  if (cookie.value === 'accepted') {
+    return
   }
 
   toast.add({
-    title: "We use first-party cookies to enhance your experience on our website.",
+    title: 'Мы используем файлы cookie для улучшения вашего опыта на сайте.',
     duration: 0,
     close: false,
     actions: [
       {
-        label: "Accept",
-        color: "neutral",
-        variant: "outline",
+        label: 'Принять',
+        color: 'neutral',
+        variant: 'outline',
         onClick: () => {
-          cookie.value = "accepted";
-        },
+          cookie.value = 'accepted'
+        }
       },
       {
-        label: "Opt out",
-        color: "neutral",
-        variant: "ghost",
-      },
-    ],
-  });
-});
+        label: 'Отклонить',
+        color: 'neutral',
+        variant: 'ghost'
+      }
+    ]
+  })
+})
 </script>
 
 <template>

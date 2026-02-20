@@ -1,0 +1,420 @@
+import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
+import {
+  mapCreateBodyToDbInsert,
+  mapCustomerDbRowToRecord,
+  type CreateCustomerBody,
+  type CustomerDbRow,
+  type WorkShift
+} from './customers'
+import type { H3Event } from 'h3'
+
+interface MultipartPart {
+  name?: string
+  filename?: string
+  type?: string
+  data: Uint8Array
+}
+
+interface SupabaseErrorData {
+  code?: string
+  message?: string
+}
+
+function isWorkShift(value: unknown): value is WorkShift {
+  return value === 'day' || value === 'night'
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function getRequiredString(value: unknown, fieldName: string) {
+  if (!isNonEmptyString(value)) {
+    throw createError({ statusCode: 400, statusMessage: `Поле ${fieldName} обязательно.` })
+  }
+
+  return value.trim()
+}
+
+function getSupabaseErrorData(error: unknown): SupabaseErrorData | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined
+  }
+
+  if (!('data' in error) || !error.data || typeof error.data !== 'object') {
+    return undefined
+  }
+
+  return error.data as SupabaseErrorData
+}
+
+function parseAge(value: unknown) {
+  const age = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(age) || age < 18) {
+    throw createError({ statusCode: 400, statusMessage: 'Возраст должен быть целым числом не меньше 18.' })
+  }
+
+  return age
+}
+
+function parseOptionalMoney(value: unknown, fieldName: string) {
+  if (value === undefined || value === null || value === '') {
+    return undefined
+  }
+
+  const amount = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(amount) || amount < 0) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `Поле ${fieldName} должно быть целым числом не меньше 0.`
+    })
+  }
+
+  return amount
+}
+
+function parseObjectPositions(value: unknown) {
+  if (!isNonEmptyString(value)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле objectPositions обязательно.'
+    })
+  }
+
+  const trimmed = value.trim()
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed) && parsed.length && parsed.every(position => isNonEmptyString(position))) {
+        return parsed.map(position => position.trim())
+      }
+    } catch {
+      // Если JSON не распарсился, используем парсер строки через запятую.
+    }
+  }
+
+  const objectPositions = trimmed
+    .split(',')
+    .map(position => position.trim())
+    .filter(Boolean)
+
+  if (!objectPositions.length) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'objectPositions должен быть непустым массивом строк.'
+    })
+  }
+
+  return objectPositions
+}
+
+function parseJsonBody(body: unknown): CreateCustomerBody {
+  if (!body || typeof body !== 'object') {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Тело запроса должно быть корректным JSON-объектом.'
+    })
+  }
+
+  const input = body as Partial<CreateCustomerBody>
+  const username = getRequiredString(input.username, 'username')
+
+  if (!input.avatar || typeof input.avatar !== 'object') {
+    throw createError({ statusCode: 400, statusMessage: 'Поле avatar.src обязательно.' })
+  }
+
+  const avatarSrc = getRequiredString(input.avatar.src, 'avatar.src')
+  const password = getRequiredString(input.password, 'password')
+  const phoneNumber = getRequiredString(input.phoneNumber, 'phoneNumber')
+  const passportFile = getRequiredString(input.passportFile, 'passportFile')
+  const age = parseAge(input.age)
+
+  if (!isWorkShift(input.workShift)) {
+    throw createError({ statusCode: 400, statusMessage: 'Поле workShift должно быть \'day\' или \'night\'.' })
+  }
+
+  const objectPinned = getRequiredString(input.objectPinned, 'objectPinned')
+  const baseSalary = parseOptionalMoney(input.baseSalary, 'baseSalary')
+  const positionBonus = parseOptionalMoney(input.positionBonus, 'positionBonus')
+
+  if (!Array.isArray(input.objectPositions) || !input.objectPositions.length || input.objectPositions.some(position => !isNonEmptyString(position))) {
+    throw createError({ statusCode: 400, statusMessage: 'objectPositions должен быть непустым массивом строк.' })
+  }
+
+  return {
+    username,
+    avatar: { src: avatarSrc },
+    password,
+    phoneNumber,
+    passportFile,
+    age,
+    workShift: input.workShift,
+    objectPinned,
+    objectPositions: input.objectPositions.map(position => position.trim()),
+    baseSalary,
+    positionBonus,
+    salaryCurrency: 'UZS'
+  }
+}
+
+function sanitizePathSegment(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'customer'
+}
+
+function sanitizeFileName(fileName: string) {
+  return fileName
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+}
+
+function encodeStoragePath(path: string) {
+  return path.split('/').map(part => encodeURIComponent(part)).join('/')
+}
+
+function buildPublicObjectUrl(baseUrl: string, bucket: string, path: string) {
+  return `${baseUrl}/storage/v1/object/public/${bucket}/${encodeStoragePath(path)}`
+}
+
+function getErrorStatusCode(error: unknown) {
+  if (!error || typeof error !== 'object' || !('statusCode' in error)) {
+    return undefined
+  }
+
+  return typeof error.statusCode === 'number' ? error.statusCode : undefined
+}
+
+async function ensureStorageBucket(options: {
+  url: string
+  serviceRoleKey: string
+  bucket: string
+  isPublic: boolean
+}) {
+  try {
+    await $fetch(`${options.url}/storage/v1/bucket`, {
+      method: 'POST',
+      headers: {
+        ...getSupabaseServerHeaders(options.serviceRoleKey),
+        'Content-Type': 'application/json'
+      },
+      body: {
+        id: options.bucket,
+        name: options.bucket,
+        public: options.isPublic
+      }
+    })
+  } catch (error: unknown) {
+    const statusCode = getErrorStatusCode(error)
+    if (statusCode === 400 || statusCode === 409) {
+      return
+    }
+
+    const data = getSupabaseErrorData(error)
+    if (data?.message?.toLowerCase().includes('already exists')) {
+      return
+    }
+
+    throw createError({
+      statusCode: 500,
+      statusMessage: `Не удалось подготовить бакет хранилища "${options.bucket}".`
+    })
+  }
+}
+
+async function uploadStorageObject(options: {
+  url: string
+  serviceRoleKey: string
+  bucket: string
+  path: string
+  data: Uint8Array
+  contentType: string
+}) {
+  try {
+    await $fetch(`${options.url}/storage/v1/object/${options.bucket}/${encodeStoragePath(options.path)}`, {
+      method: 'POST',
+      headers: {
+        ...getSupabaseServerHeaders(options.serviceRoleKey),
+        'Content-Type': options.contentType,
+        'x-upsert': 'true'
+      },
+      body: options.data
+    })
+  } catch {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `Не удалось загрузить файл в бакет "${options.bucket}".`
+    })
+  }
+}
+
+async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
+  const form = await readMultipartFormData(event)
+  if (!form || !form.length) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Данные multipart/form-data пусты.'
+    })
+  }
+
+  const fields = new Map<string, string>()
+  const decoder = new TextDecoder()
+  let avatarFile: MultipartPart | undefined
+  let passportFile: MultipartPart | undefined
+
+  for (const rawPart of form) {
+    const part = rawPart as MultipartPart
+    if (!part.name) {
+      continue
+    }
+
+    if (part.filename) {
+      if (part.name === 'avatarFile') {
+        avatarFile = part
+      }
+      if (part.name === 'passportFile') {
+        passportFile = part
+      }
+      continue
+    }
+
+    fields.set(part.name, decoder.decode(part.data))
+  }
+
+  const username = getRequiredString(fields.get('username'), 'username')
+  const password = getRequiredString(fields.get('password'), 'password')
+  const phoneNumber = getRequiredString(fields.get('phoneNumber'), 'phoneNumber')
+  const objectPinned = getRequiredString(fields.get('objectPinned'), 'objectPinned')
+  const age = parseAge(fields.get('age'))
+  const workShiftRaw = getRequiredString(fields.get('workShift'), 'workShift')
+  const objectPositions = parseObjectPositions(fields.get('objectPositions'))
+  const baseSalary = parseOptionalMoney(fields.get('baseSalary'), 'baseSalary')
+  const positionBonus = parseOptionalMoney(fields.get('positionBonus'), 'positionBonus')
+
+  if (!isWorkShift(workShiftRaw)) {
+    throw createError({ statusCode: 400, statusMessage: 'Поле workShift должно быть \'day\' или \'night\'.' })
+  }
+
+  if (!avatarFile) {
+    throw createError({ statusCode: 400, statusMessage: 'Поле avatarFile обязательно.' })
+  }
+  if (!passportFile) {
+    throw createError({ statusCode: 400, statusMessage: 'Поле passportFile обязательно.' })
+  }
+
+  if (!avatarFile.type?.startsWith('image/')) {
+    throw createError({ statusCode: 400, statusMessage: 'Файл avatarFile должен быть изображением.' })
+  }
+
+  const { url, serviceRoleKey, avatarBucket, passportBucket } = getSupabaseServerConfig()
+  await ensureStorageBucket({
+    url,
+    serviceRoleKey,
+    bucket: avatarBucket,
+    isPublic: true
+  })
+  await ensureStorageBucket({
+    url,
+    serviceRoleKey,
+    bucket: passportBucket,
+    isPublic: false
+  })
+
+  const safeUsername = sanitizePathSegment(username)
+  const uniqueId = `${Date.now()}-${crypto.randomUUID()}`
+  const avatarName = sanitizeFileName(avatarFile.filename || 'avatar')
+  const passportName = sanitizeFileName(passportFile.filename || 'passport')
+  const avatarPath = `${safeUsername}/avatars/${uniqueId}-${avatarName}`
+  const passportPath = `${safeUsername}/passports/${uniqueId}-${passportName}`
+
+  await uploadStorageObject({
+    url,
+    serviceRoleKey,
+    bucket: avatarBucket,
+    path: avatarPath,
+    data: avatarFile.data,
+    contentType: avatarFile.type || 'application/octet-stream'
+  })
+  await uploadStorageObject({
+    url,
+    serviceRoleKey,
+    bucket: passportBucket,
+    path: passportPath,
+    data: passportFile.data,
+    contentType: passportFile.type || 'application/octet-stream'
+  })
+
+  return {
+    username,
+    avatar: {
+      src: buildPublicObjectUrl(url, avatarBucket, avatarPath)
+    },
+    password,
+    phoneNumber,
+    passportFile: `${passportBucket}/${passportPath}`,
+    age,
+    workShift: workShiftRaw,
+    objectPinned,
+    objectPositions,
+    baseSalary,
+    positionBonus,
+    salaryCurrency: 'UZS'
+  }
+}
+
+async function parseCreateBody(event: H3Event): Promise<CreateCustomerBody> {
+  const contentType = getHeader(event, 'content-type')
+  if (contentType?.includes('multipart/form-data')) {
+    return parseMultipartBody(event)
+  }
+
+  return parseJsonBody(await readBody(event))
+}
+
+export default eventHandler(async (event) => {
+  const parsedBody = await parseCreateBody(event)
+  const { url, serviceRoleKey } = getSupabaseServerConfig()
+
+  try {
+    const rows = await $fetch<CustomerDbRow[]>(`${url}/rest/v1/customers`, {
+      method: 'POST',
+      headers: {
+        ...getSupabaseServerHeaders(serviceRoleKey),
+        Prefer: 'return=representation'
+      },
+      body: mapCreateBodyToDbInsert(parsedBody)
+    })
+
+    const createdRow = rows[0]
+    if (!createdRow) {
+      throw createError({
+        statusCode: 500,
+        statusMessage: 'Supabase не вернул созданного клиента.'
+      })
+    }
+
+    setResponseStatus(event, 201)
+    return mapCustomerDbRowToRecord(createdRow)
+  } catch (error: unknown) {
+    const data = getSupabaseErrorData(error)
+
+    if (data?.code === '23505') {
+      throw createError({
+        statusCode: 409,
+        statusMessage: 'Клиент с таким именем пользователя уже существует.'
+      })
+    }
+
+    if (data?.message) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: data.message
+      })
+    }
+
+    throw error
+  }
+})
