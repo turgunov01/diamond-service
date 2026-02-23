@@ -64,3 +64,28 @@ export interface SidebarNavigation {
   name: string,
   href: string
 }
+
+export interface Zone {
+  id: number
+  name: string
+  description?: string
+  createdAt: string
+}
+
+export interface Customer {
+  id: number
+  username: string
+  avatar: {
+    src: string
+  }
+  password: string
+  phoneNumber: string
+  passportFile: string
+  age: number
+  workShift: 'day' | 'night'
+  objectPinned: string
+  objectPositions: string[]
+  baseSalary: number
+  positionBonus: number
+  salaryCurrency: 'UZS'
+}

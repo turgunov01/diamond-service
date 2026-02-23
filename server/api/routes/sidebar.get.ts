@@ -21,6 +21,11 @@ const links: SidebarLinks = [
             to: '/hr'
         },
         {
+            label: 'Объекты',
+            icon: 'i-lucide-map',
+            to: '/zones'
+        },
+        {
             label: 'Настройки',
             to: '/settings',
             icon: 'i-lucide-settings',

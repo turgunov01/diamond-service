@@ -1,0 +1,43 @@
+import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
+
+export interface PinUserToZoneBody {
+  userId: number
+  zoneName: string
+}
+
+export default eventHandler(async (event) => {
+  const { userId, zoneName } = await readBody<PinUserToZoneBody>(event)
+
+  if (!userId || !zoneName) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'userId and zoneName are required'
+    })
+  }
+
+  const { url, serviceRoleKey } = getSupabaseServerConfig()
+
+  try {
+    const result = await $fetch(
+      `${url}/rest/v1/customers?id=eq.${userId}`,
+      {
+        method: 'PATCH',
+        headers: getSupabaseServerHeaders(serviceRoleKey),
+        body: {
+          object_pinned: zoneName
+        }
+      }
+    )
+
+    return {
+      success: true,
+      message: `User ${userId} pinned to zone ${zoneName}`
+    }
+  } catch (error) {
+    console.error('Error pinning user to zone:', error)
+    throw createError({
+      statusCode: 500,
+      statusMessage: 'Failed to pin user to zone'
+    })
+  }
+})
