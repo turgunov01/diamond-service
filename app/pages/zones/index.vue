@@ -1,243 +1,263 @@
 <script setup lang="ts">
-import type { Zone, Customer } from '~/types'
+import { h } from "vue";
+import type { TableColumn } from "@nuxt/ui";
+import { getPaginationRowModel } from "@tanstack/table-core";
+import type { Zone, Customer } from "~/types";
 
-const toast = useToast()
-const selectedZone = ref<Zone | null>(null)
-const isLoading = ref(false)
-const pinnedUsersLoading = ref<Record<number, boolean>>({})
-const selectedUserForPin = ref<Customer | null>(null)
-const isPinMenuOpen = ref(false)
+const UButton = resolveComponent("UButton");
+const UAvatar = resolveComponent("UAvatar");
 
-const { data: zones } = await useFetch<Zone[]>('/api/zones', {
-  default: () => []
-})
+const toast = useToast();
+const table = useTemplateRef<any>("table");
 
-const { data: customers, refresh: refreshCustomers } = await useFetch<Customer[]>('/api/customers', {
+const selectedZoneForMembers = ref<Zone | null>(null);
+const isCreateZoneModalOpen = ref(false);
+const isCreatingZone = ref(false);
+
+const newZoneForm = reactive({
+  name: "",
+  description: "",
+});
+
+const { data: zones, status, error, refresh } = await useFetch<Zone[]>("/api/zones", {
+  lazy: true,
   default: () => [],
-  lazy: true
-})
+});
 
-const pinnedUsers = computed(() => {
-  if (!selectedZone.value || !customers.value) {
-    return []
+const { data: customers, refresh: refreshCustomers } = await useFetch<Customer[]>(
+  "/api/customers",
+  {
+    default: () => [],
   }
-  return customers.value.filter(c => c.objectPinned === selectedZone.value?.name)
-})
+);
 
-const availableUsers = computed(() => {
-  if (!customers.value || !selectedZone.value) {
-    return []
+watch(
+  error,
+  (newError) => {
+    if (!newError) return;
+
+    toast.add({
+      title: "Не удалось загрузить зоны",
+      description:
+        newError.statusMessage || "Проверьте API и переменные окружения Supabase.",
+      color: "error",
+    });
+  },
+  { immediate: true }
+);
+
+function getZoneMembers(zoneName: string): Customer[] {
+  return customers.value?.filter((c) => c.objectPinned === zoneName) || [];
+}
+
+const zoneMembers = computed<Customer[]>(() => {
+  if (!selectedZoneForMembers.value?.name || !customers.value) {
+    return [];
   }
-  return customers.value.filter(c => c.objectPinned !== selectedZone.value?.name)
-})
 
-async function pinUserToZone(user: Customer, zone: Zone) {
-  if (!zone) return
+  return customers.value.filter(
+    (c) => c.objectPinned === selectedZoneForMembers.value!.name
+  );
+});
 
-  pinnedUsersLoading.value[user.id] = true
+function selectZoneMembers(zone: Zone) {
+  selectedZoneForMembers.value = zone;
+}
+
+function closeMembersView() {
+  selectedZoneForMembers.value = null;
+}
+
+async function deleteZone(zone: Zone) {
+  const confirmed = confirm(`Delete zone "${zone.name}"?`);
+  if (!confirmed) return;
 
   try {
-    await $fetch('/api/zones/pin', {
-      method: 'PATCH',
-      body: {
-        userId: user.id,
-        zoneName: zone.name
-      }
-    })
+    await $fetch(`/api/zones/${zone.id}`, {
+      method: "DELETE",
+    });
 
     toast.add({
-      title: 'Success',
-      description: `${user.username} has been pinned to ${zone.name}`,
-      icon: 'i-lucide-check',
-      color: 'success'
-    })
+      title: "Deleted",
+      description: `Zone "${zone.name}" removed`,
+      color: "success",
+    });
 
-    await refreshCustomers()
-    selectedUserForPin.value = null
-  } catch (error) {
+    await refresh();
+  } catch {
     toast.add({
-      title: 'Error',
-      description: 'Failed to pin user to zone',
-      icon: 'i-lucide-alert-circle',
-      color: 'error'
-    })
-  } finally {
-    pinnedUsersLoading.value[user.id] = false
+      title: "Error",
+      description: "Failed to delete zone",
+      color: "error",
+    });
   }
 }
 
-function selectZone(zone: Zone) {
-  selectedZone.value = zone
-}
+const zonesColumns: TableColumn<Zone>[] = [
+  { accessorKey: "id", header: "ID" },
+  { accessorKey: "name", header: "Название" },
+  { accessorKey: "description", header: "Описание" },
+  {
+    id: "members",
+    header: "Пользователей",
+    cell: ({ row }) => getZoneMembers(row.original.name).length,
+  },
+  {
+    id: "actions",
+    header: "Действия",
+    cell: ({ row }) => {
+      return h("div", { class: "flex justify-end gap-2" }, [
+        h(UButton, {
+          icon: "i-lucide-users",
+          color: "primary",
+          variant: "ghost",
+          size: "sm",
+          onClick: () => selectZoneMembers(row.original),
+        }),
+        h(UButton, {
+          icon: "i-lucide-trash-2",
+          color: "error",
+          variant: "ghost",
+          size: "sm",
+          onClick: () => deleteZone(row.original),
+        }),
+      ]);
+    },
+  },
+];
 
-onMounted(() => {
-  if (zones.value && zones.value.length > 0) {
-    selectedZone.value = zones.value[0]
-  }
-})
+const columnFilters = ref([{ id: "name", value: "" }]);
+const columnVisibility = ref();
+const pagination = ref({ pageIndex: 0, pageSize: 10 });
+
+const name = computed({
+  get: () => (table.value?.tableApi?.getColumn("name")?.getFilterValue() as string) || "",
+  set: (value: string) =>
+    table.value?.tableApi?.getColumn("name")?.setFilterValue(value || undefined),
+});
 </script>
 
 <template>
   <UDashboardPanel id="zones">
     <template #header>
-      <UDashboardNavbar title="Zones Management" :ui="{ right: 'gap-3' }">
+      <UDashboardNavbar title="Zones Management">
         <template #leading>
           <UDashboardSidebarCollapse />
+        </template>
+
+        <template v-if="selectedZoneForMembers" #right>
+          <UButton
+            icon="i-lucide-x"
+            color="neutral"
+            variant="ghost"
+            @click="closeMembersView"
+          />
         </template>
       </UDashboardNavbar>
     </template>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6">
-      <!-- Zones List -->
-      <div class="lg:col-span-1">
+    <template #body>
+      <div v-if="!selectedZoneForMembers" class="space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-1.5">
+          <UInput
+            v-model="name"
+            class="max-w-sm"
+            icon="i-lucide-search"
+            placeholder="Filter by zone name..."
+          />
+
+          <div class="flex flex-wrap items-center gap-1.5">
+            <UButton
+              label="Create Zone"
+              icon="i-lucide-plus"
+              color="primary"
+              @click="useRouter().push('/zones/create')"
+            />
+          </div>
+        </div>
+
+        <UTable
+          ref="table"
+          v-model:column-filters="columnFilters"
+          v-model:column-visibility="columnVisibility"
+          v-model:pagination="pagination"
+          :pagination-options="{
+            getPaginationRowModel: getPaginationRowModel(),
+          }"
+          class="shrink-0"
+          :data="zones"
+          :columns="zonesColumns"
+          :loading="status === 'pending'"
+          :ui="{
+            base: 'table-fixed border-separate border-spacing-0',
+            thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
+            tbody: '[&>tr]:last:[&>td]:border-b-0',
+            th:
+              'py-2 first:rounded-l-lg last:rounded-r-lg border-y border-default first:border-l last:border-r',
+            td: 'border-b border-default',
+            separator: 'h-0',
+          }"
+        />
+
+        <div class="flex items-center justify-between gap-3 border-t border-default pt-4">
+          <div class="text-sm text-white">
+            Showing {{ pagination.pageIndex * pagination.pageSize + 1 }} to
+            {{
+              Math.min(
+                (pagination.pageIndex + 1) * pagination.pageSize,
+                zones?.length || 0
+              )
+            }}
+            of {{ zones?.length || 0 }} zones
+          </div>
+
+          <UPagination
+            :default-page="pagination.pageIndex + 1"
+            :page-count="pagination.pageSize"
+            :total="zones?.length || 0"
+            @update:page="(p: number) => { pagination.pageIndex = p - 1 }"
+          />
+        </div>
+      </div>
+
+      <div v-else class="space-y-4">
         <UPageCard
-          title="Зоны"
-          description="Select a zone to manage users"
+          :title="`Members in ${selectedZoneForMembers.name}`"
+          :description="`Assigned users: ${zoneMembers.length}`"
           variant="subtle"
-          :ui="{ container: 'p-0', wrapper: 'gap-y-0' }"
+          orientation="horizontal"
         >
-          <div class="divide-y divide-default">
-            <button
-              v-for="zone in zones"
-              :key="zone.id"
-              :class="[
-                'w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors',
-                selectedZone?.id === zone.id && 'bg-gray-100 dark:bg-gray-750 border-l-2 border-primary'
-              ]"
-              @click="selectZone(zone)"
+        </UPageCard>
+
+        <UPageCard variant="subtle">
+          <div v-if="zoneMembers.length" class="space-y-3">
+            <div
+              v-for="user in zoneMembers"
+              :key="user.id"
+              class="flex items-center gap-3 p-3 border border-default rounded-lg"
             >
-              <div class="font-semibold text-sm">{{ zone.name }}</div>
-              <div v-if="zone.description" class="text-xs text-gray-500 mt-1">
-                {{ zone.description }}
+              <UAvatar
+                :src="user.avatar?.src || undefined"
+                :alt="user.username || 'User'"
+                size="md"
+              />
+              <div>
+                <div class="font-semibold text-sm">
+                  {{ user.username || "Unnamed user" }}
+                </div>
+                <div class="text-xs text-white">
+                  Age: {{ user.age ?? "-" }}, Shift: {{ user.workShift ?? "-" }}
+                </div>
               </div>
-              <div class="text-xs text-gray-400 mt-2">
-                {{
-                  customers?.filter(c => c.objectPinned === zone.name).length || 0
-                }} user(s)
-              </div>
-            </button>
+            </div>
+          </div>
+
+          <div v-else class="py-8 text-center text-default">
+            Локации не имеют закрепленных пользователей. <br />
+            Попросите сотрудников прикрепить себя к локации для отображения их здесь.
           </div>
         </UPageCard>
       </div>
-
-      <!-- Zone Details and Users -->
-      <div class="lg:col-span-2">
-        <div v-if="selectedZone" class="space-y-4">
-          <!-- Zone Header -->
-          <UPageCard
-            :title="`${selectedZone.name}`"
-            :description="selectedZone.description || 'No description'"
-            variant="naked"
-            orientation="horizontal"
-            class="mb-4"
-          >
-            <UButton
-              label="Pin User"
-              color="primary"
-              @click="isPinMenuOpen = true"
-            />
-          </UPageCard>
-
-          <!-- Pinned Users -->
-          <UPageCard
-            title="Assigned Users"
-            :description="`${pinnedUsers.length} user(s) assigned to this zone`"
-            variant="subtle"
-          >
-            <div v-if="pinnedUsers.length > 0" class="space-y-3">
-              <div
-                v-for="user in pinnedUsers"
-                :key="user.id"
-                class="flex items-center justify-between p-3 border border-default rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800"
-              >
-                <div class="flex items-center gap-3">
-                  <UAvatar
-                    :src="user.avatar.src"
-                    :alt="user.username"
-                    size="md"
-                  />
-                  <div>
-                    <div class="font-semibold text-sm">{{ user.username }}</div>
-                    <div class="text-xs text-gray-500">
-                      Age: {{ user.age }}, Shift: {{ user.workShift }}
-                    </div>
-                  </div>
-                </div>
-                <UBadge color="primary"> Pinned </UBadge>
-              </div>
-            </div>
-            <div v-else class="py-8 text-center">
-              <p class="text-gray-500">No users assigned yet</p>
-            </div>
-          </UPageCard>
-
-          <!-- Pin User Modal/Popover -->
-          <div v-if="isPinMenuOpen" class="fixed inset-0 z-50 flex items-center justify-center">
-            <div
-              class="fixed inset-0 bg-black/50"
-              @click="isPinMenuOpen = false"
-            />
-            <UPageCard
-              title="Select User to Pin"
-              description="Choose an unassigned user"
-              variant="subtle"
-              :ui="{ container: 'relative z-10 max-w-md' }"
-            >
-              <div class="space-y-2 max-h-96 overflow-y-auto">
-                <div
-                  v-if="availableUsers.length > 0"
-                  class="space-y-2"
-                >
-                  <button
-                    v-for="user in availableUsers"
-                    :key="user.id"
-                    class="w-full text-left p-3 border border-default rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between"
-                    :disabled="pinnedUsersLoading[user.id]"
-                    @click="pinUserToZone(user, selectedZone)"
-                  >
-                    <div class="flex items-center gap-3">
-                      <UAvatar
-                        :src="user.avatar.src"
-                        :alt="user.username"
-                        size="sm"
-                      />
-                      <div>
-                        <div class="font-semibold text-sm">{{ user.username }}</div>
-                      </div>
-                    </div>
-                    <UIcon
-                      v-if="pinnedUsersLoading[user.id]"
-                      name="i-lucide-loader"
-                      class="animate-spin"
-                    />
-                    <UIcon
-                      v-else
-                      name="i-lucide-check"
-                      class="text-gray-300"
-                    />
-                  </button>
-                </div>
-                <div v-else class="py-8 text-center text-gray-500">
-                  All users are already assigned
-                </div>
-              </div>
-
-              <template #footer>
-                <UButton
-                  label="Close"
-                  color="gray"
-                  block
-                  @click="isPinMenuOpen = false"
-                />
-              </template>
-            </UPageCard>
-          </div>
-        </div>
-
-        <div v-else class="flex items-center justify-center h-96">
-          <p class="text-gray-500">Select a zone to manage users</p>
-        </div>
-      </div>
-    </div>
+    </template>
   </UDashboardPanel>
 </template>
