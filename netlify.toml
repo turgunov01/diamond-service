@@ -9,3 +9,5 @@
 # Match Netlify’s current default runtime to avoid version drift.
   NODE_VERSION = "20"
   NETLIFY_USE_PNPM = "true"
+  # Give Node more heap to prevent OOM during Nitro bundling on Netlify.
+  NODE_OPTIONS = "--max-old-space-size=4096"

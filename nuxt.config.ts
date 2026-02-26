@@ -7,7 +7,8 @@ export default defineNuxtConfig({
   ],
 
   devtools: {
-    enabled: true
+    // Keep Nuxt devtools for local dev; disable in production to save build memory.
+    enabled: process.env.NODE_ENV !== 'production'
   },
 
   css: ['~/assets/css/main.css'],
