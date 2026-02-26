@@ -253,26 +253,28 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
 
     <template #body>
       <div class="space-y-4">
-        <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <UTabs
             v-model="activeTab"
             :items="tabs"
             :content="false"
-            class="w-max"
-            :ui="{ list: 'w-max' }"
+            class="w-full sm:w-max"
+            :ui="{ list: 'w-full sm:w-max' }"
           />
 
-          <div class="flex flex-wrap items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             <UButton
               v-if="activeTab === 'templates'"
               label="Создать шаблон"
               icon="i-lucide-file-plus"
+              class="flex-1 sm:flex-none"
               @click="createTemplate"
             />
             <UButton
               v-if="activeTab === 'sent'"
               label="Новая отправка"
               icon="i-lucide-send"
+              class="flex-1 sm:flex-none"
               @click="openSendModal()"
             />
             <template v-if="activeTab === 'signed'">
@@ -352,80 +354,123 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
           </div>
         </div>
 
-        <div v-else-if="activeTab === 'sent'" class="rounded-lg border border-default overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead>
-              <tr class="bg-elevated/50">
-                <th class="px-3 py-2 text-left">ID</th>
-                <th class="px-3 py-2 text-left">Заголовок</th>
-                <th class="px-3 py-2 text-left">Шаблон</th>
-                <th class="px-3 py-2 text-left">Получатели</th>
-                <th class="px-3 py-2 text-left">Подписано</th>
-                <th class="px-3 py-2 text-left">Статус</th>
-                <th class="px-3 py-2 text-left">Дата</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="dispatch in documentsData.sent"
-                :key="dispatch.id"
-                class="border-t border-default"
-              >
-                <td class="px-3 py-2">{{ dispatch.id }}</td>
-                <td class="px-3 py-2">{{ dispatch.title }}</td>
-                <td class="px-3 py-2">{{ dispatch.templateName || '-' }}</td>
-                <td class="px-3 py-2">{{ dispatch.recipientCount }}</td>
-                <td class="px-3 py-2">{{ dispatch.signedCount }}</td>
-                <td class="px-3 py-2">
-                  <UBadge
-                    :label="statusLabel(dispatch.status)"
-                    :color="statusColor(dispatch.status)"
-                    variant="subtle"
-                  />
-                </td>
-                <td class="px-3 py-2">{{ formatDate(dispatch.sentAt) }}</td>
-              </tr>
-              <tr v-if="!documentsData.sent.length">
-                <td class="px-3 py-4 text-muted" colspan="7">
-                  Отправленных документов пока нет.
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else-if="activeTab === 'sent'" class="space-y-3">
+          <div class="rounded-lg border border-default overflow-x-auto hidden md:block">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="bg-elevated/50">
+                  <th class="px-3 py-2 text-left">ID</th>
+                  <th class="px-3 py-2 text-left">Заголовок</th>
+                  <th class="px-3 py-2 text-left">Шаблон</th>
+                  <th class="px-3 py-2 text-left">Получатели</th>
+                  <th class="px-3 py-2 text-left">Подписано</th>
+                  <th class="px-3 py-2 text-left">Статус</th>
+                  <th class="px-3 py-2 text-left">Дата</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="dispatch in documentsData.sent"
+                  :key="dispatch.id"
+                  class="border-t border-default"
+                >
+                  <td class="px-3 py-2">{{ dispatch.id }}</td>
+                  <td class="px-3 py-2">{{ dispatch.title }}</td>
+                  <td class="px-3 py-2">{{ dispatch.templateName || '-' }}</td>
+                  <td class="px-3 py-2">{{ dispatch.recipientCount }}</td>
+                  <td class="px-3 py-2">{{ dispatch.signedCount }}</td>
+                  <td class="px-3 py-2">
+                    <UBadge
+                      :label="statusLabel(dispatch.status)"
+                      :color="statusColor(dispatch.status)"
+                      variant="subtle"
+                    />
+                  </td>
+                  <td class="px-3 py-2">{{ formatDate(dispatch.sentAt) }}</td>
+                </tr>
+                <tr v-if="!documentsData.sent.length">
+                  <td class="px-3 py-4 text-muted" colspan="7">
+                    Отправленных документов пока нет.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div v-if="documentsData.sent.length" class="space-y-3 md:hidden">
+            <div
+              v-for="dispatch in documentsData.sent"
+              :key="dispatch.id"
+              class="rounded-lg border border-default bg-elevated/50 p-3 space-y-2"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <p class="font-semibold text-highlighted">#{{ dispatch.id }} · {{ dispatch.title }}</p>
+                <UBadge :label="statusLabel(dispatch.status)" :color="statusColor(dispatch.status)" variant="subtle" />
+              </div>
+              <p class="text-xs text-muted">Шаблон: {{ dispatch.templateName || '-' }}</p>
+              <div class="flex items-center gap-3 text-sm">
+                <span>Получатели: {{ dispatch.recipientCount }}</span>
+                <span class="text-muted">Подписано: {{ dispatch.signedCount }}</span>
+              </div>
+              <p class="text-xs text-muted">Отправлено: {{ formatDate(dispatch.sentAt) }}</p>
+            </div>
+          </div>
+
+          <p v-else class="text-sm text-muted md:hidden">Отправленных документов пока нет.</p>
         </div>
 
-        <div v-else class="rounded-lg border border-default overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead>
-              <tr class="bg-elevated/50">
-                <th class="px-3 py-2 text-left">ID</th>
-                <th class="px-3 py-2 text-left">Сотрудник</th>
-                <th class="px-3 py-2 text-left">Телефон</th>
-                <th class="px-3 py-2 text-left">Шаблон</th>
-                <th class="px-3 py-2 text-left">Подписано через</th>
-                <th class="px-3 py-2 text-left">Дата подписи</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="item in documentsData.signed"
-                :key="item.id"
-                class="border-t border-default"
-              >
-                <td class="px-3 py-2">{{ item.id }}</td>
-                <td class="px-3 py-2">{{ item.employeeName }}</td>
-                <td class="px-3 py-2">{{ item.phoneNumber }}</td>
-                <td class="px-3 py-2">{{ item.templateName || '-' }}</td>
-                <td class="px-3 py-2">{{ item.signedVia }}</td>
-                <td class="px-3 py-2">{{ formatDate(item.signedAt) }}</td>
-              </tr>
-              <tr v-if="!documentsData.signed.length">
-                <td class="px-3 py-4 text-muted" colspan="6">
-                  Подписанных документов пока нет.
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else class="space-y-3">
+          <div class="rounded-lg border border-default overflow-x-auto hidden md:block">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="bg-elevated/50">
+                  <th class="px-3 py-2 text-left">ID</th>
+                  <th class="px-3 py-2 text-left">Сотрудник</th>
+                  <th class="px-3 py-2 text-left">Телефон</th>
+                  <th class="px-3 py-2 text-left">Шаблон</th>
+                  <th class="px-3 py-2 text-left">Подписано через</th>
+                  <th class="px-3 py-2 text-left">Дата подписи</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="item in documentsData.signed"
+                  :key="item.id"
+                  class="border-t border-default"
+                >
+                  <td class="px-3 py-2">{{ item.id }}</td>
+                  <td class="px-3 py-2">{{ item.employeeName }}</td>
+                  <td class="px-3 py-2">{{ item.phoneNumber }}</td>
+                  <td class="px-3 py-2">{{ item.templateName || '-' }}</td>
+                  <td class="px-3 py-2">{{ item.signedVia }}</td>
+                  <td class="px-3 py-2">{{ formatDate(item.signedAt) }}</td>
+                </tr>
+                <tr v-if="!documentsData.signed.length">
+                  <td class="px-3 py-4 text-muted" colspan="6">
+                    Подписанных документов пока нет.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div v-if="documentsData.signed.length" class="space-y-3 md:hidden">
+            <div
+              v-for="item in documentsData.signed"
+              :key="item.id"
+              class="rounded-lg border border-default bg-elevated/50 p-3 space-y-2"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <p class="font-semibold text-highlighted">#{{ item.id }} · {{ item.employeeName }}</p>
+                <span class="text-xs text-muted">{{ formatDate(item.signedAt) }}</span>
+              </div>
+              <p class="text-sm text-muted">Телефон: {{ item.phoneNumber }}</p>
+              <p class="text-sm">Шаблон: {{ item.templateName || '-' }}</p>
+              <p class="text-sm text-muted">Подписано через: {{ item.signedVia }}</p>
+            </div>
+          </div>
+
+          <p v-else class="text-sm text-muted md:hidden">Подписанных документов пока нет.</p>
         </div>
 
         <p v-if="status === 'pending'" class="text-sm text-muted">
