@@ -1,4 +1,4 @@
-﻿import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
 import {
@@ -27,6 +27,29 @@ function parseExportScope(value: unknown): ExportScope {
   }
 
   return 'signed'
+}
+
+const headersByScope: Record<ExportScope, string[]> = {
+  templates: ['id', 'name', 'contractType', 'createdAt', 'updatedAt'],
+  sent: ['id', 'templateName', 'title', 'recipients', 'signedCount', 'status', 'sentAt'],
+  signed: ['id', 'templateName', 'employeeName', 'phoneNumber', 'signedVia', 'signedAt']
+}
+
+async function toXlsxBuffer(scope: ExportScope, rows: Record<string, unknown>[]) {
+  const workbook = new ExcelJS.Workbook()
+  const worksheet = workbook.addWorksheet(scope)
+  const headers = headersByScope[scope] || (rows[0] ? Object.keys(rows[0]) : [])
+
+  if (headers.length) {
+    worksheet.columns = headers.map(header => ({
+      header,
+      key: header
+    }))
+  }
+
+  rows.forEach(row => worksheet.addRow(row))
+
+  return workbook.xlsx.writeBuffer()
 }
 
 function toCsv(rows: Record<string, unknown>[]) {
@@ -192,15 +215,13 @@ export default eventHandler(async (event) => {
   }
 
   if (format === 'xlsx') {
-    const workbook = XLSX.utils.book_new()
-    const worksheet = XLSX.utils.json_to_sheet(exportRows)
-    XLSX.utils.book_append_sheet(workbook, worksheet, scope)
-    const arrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+    const xlsxBuffer = await toXlsxBuffer(scope, exportRows)
+    const payload = xlsxBuffer instanceof Uint8Array ? xlsxBuffer : new Uint8Array(xlsxBuffer as ArrayBuffer)
 
     setHeader(event, 'Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     setHeader(event, 'Content-Disposition', `attachment; filename="${fileStem}.xlsx"`)
 
-    return new Uint8Array(arrayBuffer)
+    return payload
   }
 
   const pdfBuffer = await toPdfBuffer(`Documents Export: ${scope}`, exportRows)
@@ -209,4 +230,3 @@ export default eventHandler(async (event) => {
 
   return pdfBuffer
 })
-

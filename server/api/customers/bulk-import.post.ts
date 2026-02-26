@@ -1,4 +1,4 @@
-﻿import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
 import {
   mapCreateBodyToDbInsert,
@@ -158,35 +158,111 @@ function sanitizeUsername(value: string) {
     .replace(/^\.|\.$/g, '')
 }
 
-function parseSpreadsheet(bytes: Uint8Array, fileName: string) {
-  const extension = fileName.toLowerCase().split('.').pop()
-
-  if (extension === 'csv') {
-    const text = new TextDecoder().decode(bytes)
-    const workbook = XLSX.read(text, { type: 'string' })
-    const sheetName = workbook.SheetNames[0]
-    if (!sheetName) {
-      return [] as Record<string, unknown>[]
-    }
-    const worksheet = workbook.Sheets[sheetName]
-    if (!worksheet) {
-      return [] as Record<string, unknown>[]
-    }
-    return XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' })
+function normalizeCellValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return ''
   }
 
-  const workbook = XLSX.read(bytes, { type: 'buffer' })
-  const sheetName = workbook.SheetNames[0]
-  if (!sheetName) {
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  if (typeof value === 'object') {
+    if (Array.isArray(value)) {
+      return value.join(', ')
+    }
+
+    if ('result' in value && (value as { result?: unknown }).result !== undefined) {
+      return (value as { result?: unknown }).result
+    }
+
+    if ('text' in value && typeof (value as { text: unknown }).text === 'string') {
+      return (value as { text: string }).text
+    }
+
+    return String(value)
+  }
+
+  return value
+}
+
+function worksheetToJson(worksheet: ExcelJS.Worksheet) {
+  if (!worksheet || worksheet.actualRowCount < 1) {
     return [] as Record<string, unknown>[]
   }
 
-  const worksheet = workbook.Sheets[sheetName]
+  const headerRow = worksheet.getRow(1)
+  const headers = headerRow.values
+    .slice(1)
+    .map((cell, index) => {
+      const header = String(normalizeCellValue(cell)).trim()
+      return header.length ? header : `column_${index + 1}`
+    })
+
+  if (!headers.length) {
+    return [] as Record<string, unknown>[]
+  }
+
+  const rows: Record<string, unknown>[] = []
+
+  for (let rowIndex = 2; rowIndex <= worksheet.actualRowCount; rowIndex++) {
+    const row = worksheet.getRow(rowIndex)
+    if (!row.hasValues) {
+      continue
+    }
+
+    const record: Record<string, unknown> = {}
+    let hasData = false
+
+    headers.forEach((header, cellIndex) => {
+      const cellValue = normalizeCellValue(row.getCell(cellIndex + 1).value)
+      record[header] = cellValue === undefined ? '' : cellValue
+      if (cellValue !== '' && cellValue !== null && cellValue !== undefined) {
+        hasData = true
+      }
+    })
+
+    if (hasData) {
+      rows.push(record)
+    }
+  }
+
+  return rows
+}
+
+async function parseSpreadsheet(bytes: Uint8Array, fileName: string) {
+  const extension = fileName.toLowerCase().split('.').pop()
+  const workbook = new ExcelJS.Workbook()
+
+  if (extension !== 'csv' && extension !== 'xlsx') {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поддерживаются только файлы .xlsx или .csv.'
+    })
+  }
+
+  let worksheet: ExcelJS.Worksheet | undefined
+
+  try {
+    if (extension === 'csv') {
+      const text = new TextDecoder().decode(bytes)
+      worksheet = await workbook.csv.read(text)
+    } else {
+      await workbook.xlsx.load(Buffer.from(bytes))
+      worksheet = workbook.worksheets[0]
+    }
+  } catch {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Не удалось прочитать файл. Убедитесь, что это валидный .xlsx или .csv.'
+    })
+  }
+
   if (!worksheet) {
     return [] as Record<string, unknown>[]
   }
 
-  return XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' })
+  return worksheetToJson(worksheet)
 }
 
 export default eventHandler(async (event) => {
@@ -200,7 +276,7 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'File is required in field "file".' })
   }
 
-  const rawRows = parseSpreadsheet(filePart.data, filePart.filename)
+  const rawRows = await parseSpreadsheet(filePart.data, filePart.filename)
 
   if (!rawRows.length) {
     throw createError({ statusCode: 400, statusMessage: 'Spreadsheet is empty.' })
@@ -363,4 +439,3 @@ export default eventHandler(async (event) => {
     errors
   }
 })
-

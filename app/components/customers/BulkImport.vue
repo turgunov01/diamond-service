@@ -128,7 +128,7 @@ async function onFileSelected(event: Event) {
       ref="fileInput"
       class="hidden"
       type="file"
-      accept=".xlsx,.xls,.csv"
+      accept=".xlsx,.csv"
       @change="onFileSelected"
     >
   </div>

@@ -1,8 +1,10 @@
 ﻿import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
 import {
   downloadStorageObject,
+  ensureStorageBucket,
   getSupabaseErrorData,
   mapTemplateDbRowToRecord,
+  uploadStorageObject,
   type DocumentTemplateDbRow
 } from '../documents'
 import type { H3Event } from 'h3'
@@ -49,13 +51,52 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Template not found.' })
   }
 
-  const projectRaw = await downloadStorageObject({
-    url,
-    serviceRoleKey,
-    bucket: documentTemplateBucket,
-    path: row.storage_path,
-    downloadErrorMessage: 'Template project file is missing in storage.'
-  })
+  // Подгружаем проект из Storage, если его нет — восстанавливаем из HTML/CSS.
+  let projectRaw: string | null = null
+  try {
+    projectRaw = await downloadStorageObject({
+      url,
+      serviceRoleKey,
+      bucket: documentTemplateBucket,
+      path: row.storage_path,
+      downloadErrorMessage: 'Template project file is missing in storage.'
+    })
+  } catch (error: unknown) {
+    const statusCode = (error as { statusCode?: number })?.statusCode
+    if (statusCode !== 404) {
+      throw error
+    }
+
+    await ensureStorageBucket({
+      url,
+      serviceRoleKey,
+      bucket: documentTemplateBucket,
+      isPublic: false,
+      missingErrorMessage: `Unable to initialize storage bucket "${documentTemplateBucket}".`
+    })
+
+    const fallbackProject = JSON.stringify({
+      name: row.name,
+      description: row.description,
+      contractType: row.contract_type,
+      html: row.html,
+      css: row.css,
+      projectData: null,
+      recoveredAt: new Date().toISOString()
+    })
+
+    await uploadStorageObject({
+      url,
+      serviceRoleKey,
+      bucket: documentTemplateBucket,
+      path: row.storage_path,
+      data: fallbackProject,
+      contentType: 'application/json; charset=utf-8',
+      uploadErrorMessage: 'Failed to recreate missing template project in storage.'
+    })
+
+    projectRaw = fallbackProject
+  }
 
   let parsedProject: unknown = null
   try {

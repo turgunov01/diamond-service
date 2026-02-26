@@ -46,6 +46,9 @@ const editor = ref<GrapesEditor | null>(null)
 const templateName = ref('Новый шаблон')
 const templateDescription = ref('')
 const contractType = ref('gph')
+const docPreviewBg = ref(
+  'radial-gradient(circle at 25px 25px, #eef2ff 0, #eef2ff 4px, transparent 4px), linear-gradient(90deg, #f8fafc 1px, transparent 1px), linear-gradient(180deg, #f8fafc 1px, transparent 1px)'
+)
 
 const loading = ref(false)
 const saving = ref(false)
@@ -267,12 +270,15 @@ onBeforeUnmount(() => {
     </template>
 
     <template #body>
-      <div class="grid gap-4 xl:grid-cols-[340px_1fr]">
+      <div class="grid gap-4 xl:grid-cols-[320px_minmax(640px,1fr)_320px] items-start">
+        <!-- Левая колонка: информация о шаблоне -->
         <div class="space-y-4">
-          <div class="rounded-lg border border-default p-4 space-y-3">
-            <UFormField label="Название шаблона">
-              <UInput v-model="templateName" class="w-full" />
-            </UFormField>
+          <div class="rounded-lg border border-default p-4 space-y-3 bg-elevated/40 backdrop-blur">
+            <div class="flex items-center justify-between">
+              <UFormField label="Название шаблона">
+                <UInput v-model="templateName" class="w-full" />
+              </UFormField>
+            </div>
 
             <UFormField label="Тип договора">
               <USelect
@@ -288,24 +294,74 @@ onBeforeUnmount(() => {
             </UFormField>
 
             <UFormField label="Описание">
-              <UTextarea v-model="templateDescription" class="w-full" :rows="3" />
+              <UTextarea v-model="templateDescription" class="w-full" :rows="4" />
             </UFormField>
 
-            <p class="text-xs text-muted">
-              Шаблон сохраняется в таблицу `document_templates`, а проект GrapesJS выгружается в Supabase Storage.
-            </p>
+            <div class="rounded-md border border-dashed border-default px-3 py-2 text-xs text-muted">
+              Шаблон сохраняется в таблицу `document_templates`, а проект GrapesJS — в Supabase Storage.
+            </div>
           </div>
-
-          <div id="gjs-blocks" class="rounded-lg border border-default p-3 max-h-56 overflow-auto" />
-          <div id="gjs-layers" class="rounded-lg border border-default p-3 max-h-56 overflow-auto" />
-          <div id="gjs-styles" class="rounded-lg border border-default p-3 max-h-56 overflow-auto" />
         </div>
 
-        <div class="rounded-lg border border-default bg-white overflow-hidden">
-          <div ref="editorRoot" />
+        <!-- Центр: полотно документа в A4 -->
+        <div class="rounded-xl border border-default bg-elevated/20 p-4">
+          <div class="doc-shell">
+            <div
+              class="doc-sheet"
+              :style="{ backgroundImage: docPreviewBg }"
+            >
+              <div ref="editorRoot" class="h-full w-full" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Правая колонка: редакторы блоков / слои / стили -->
+        <div class="space-y-3">
+          <div class="rounded-lg border border-default bg-elevated/30 p-3">
+            <div class="flex items-center justify-between pb-2">
+              <p class="text-sm font-semibold text-highlighted">Блоки</p>
+              <UBadge label="GrapesJS" color="neutral" variant="subtle" />
+            </div>
+            <div id="gjs-blocks" class="max-h-[360px] overflow-auto pr-1" />
+          </div>
+
+          <div class="rounded-lg border border-default bg-elevated/30 p-3">
+            <p class="text-sm font-semibold text-highlighted pb-2">Слои</p>
+            <div id="gjs-layers" class="max-h-[240px] overflow-auto pr-1" />
+          </div>
+
+          <div class="rounded-lg border border-default bg-elevated/30 p-3">
+            <p class="text-sm font-semibold text-highlighted pb-2">Стили</p>
+            <div id="gjs-styles" class="max-h-[320px] overflow-auto pr-1" />
+          </div>
         </div>
       </div>
     </template>
   </UDashboardPanel>
 </template>
+
+<style scoped>
+.doc-shell {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(248, 250, 252, 0.8));
+  min-height: 70vh;
+}
+
+.doc-sheet {
+  position: relative;
+  width: min(960px, 100%);
+  aspect-ratio: 210 / 297;
+  background-color: white;
+  background-size: 180px 180px;
+  background-repeat: repeat;
+  box-shadow:
+    0 10px 40px rgba(15, 23, 42, 0.14),
+    0 4px 16px rgba(15, 23, 42, 0.1);
+  border-radius: 10px;
+  overflow: hidden;
+  padding: 28px;
+}
+</style>
 

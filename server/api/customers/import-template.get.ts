@@ -1,4 +1,4 @@
-﻿import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 
 type TemplateFormat = 'csv' | 'xlsx'
 
@@ -8,6 +8,34 @@ function parseFormat(value: unknown): TemplateFormat {
   }
 
   return 'xlsx'
+}
+
+function toCsv(rows: Record<string, unknown>[]) {
+  if (!rows.length) {
+    return 'empty\n'
+  }
+
+  const firstRow = rows[0] || {}
+  const headers = Object.keys(firstRow)
+  const lines = [headers.join(',')]
+
+  for (const row of rows) {
+    lines.push(headers.map((header) => {
+      const value = row[header]
+      if (value === null || value === undefined) {
+        return ''
+      }
+
+      const raw = String(value)
+      if (raw.includes(',') || raw.includes('"') || raw.includes('\n')) {
+        return `"${raw.replace(/"/g, '""')}"`
+      }
+
+      return raw
+    }).join(','))
+  }
+
+  return lines.join('\n')
 }
 
 const templateRows = [
@@ -31,8 +59,7 @@ export default eventHandler(async (event) => {
   const format = parseFormat(query.format)
 
   if (format === 'csv') {
-    const worksheet = XLSX.utils.json_to_sheet(templateRows)
-    const csv = XLSX.utils.sheet_to_csv(worksheet)
+    const csv = toCsv(templateRows)
 
     setHeader(event, 'Content-Type', 'text/csv; charset=utf-8')
     setHeader(event, 'Content-Disposition', 'attachment; filename="customers-import-template.csv"')
@@ -40,14 +67,21 @@ export default eventHandler(async (event) => {
     return csv
   }
 
-  const workbook = XLSX.utils.book_new()
-  const worksheet = XLSX.utils.json_to_sheet(templateRows)
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'template')
-  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' })
+  const workbook = new ExcelJS.Workbook()
+  const worksheet = workbook.addWorksheet('template')
+  const headers = Object.keys(templateRows[0])
+
+  worksheet.columns = headers.map(header => ({
+    header,
+    key: header
+  }))
+  templateRows.forEach(row => worksheet.addRow(row))
+
+  const buffer = await workbook.xlsx.writeBuffer()
+  const payload = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer as ArrayBuffer)
 
   setHeader(event, 'Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
   setHeader(event, 'Content-Disposition', 'attachment; filename="customers-import-template.xlsx"')
 
-  return buffer
+  return payload
 })
-
