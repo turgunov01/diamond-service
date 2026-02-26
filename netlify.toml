@@ -1,0 +1,11 @@
+[build]
+# Use pnpm so Netlify installs dependencies with the correct lockfile.
+  command = "pnpm run build"
+# Nitro/Netlify automatically use the right publish + functions directories for Nuxt;
+# keeping publish at "dist" works because Nuxt creates a symlink to .output/public.
+  publish = "dist"
+
+[build.environment]
+# Match Netlify’s current default runtime to avoid version drift.
+  NODE_VERSION = "20"
+  NETLIFY_USE_PNPM = "true"
