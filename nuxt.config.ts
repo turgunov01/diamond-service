@@ -16,7 +16,8 @@ export default defineNuxtConfig({
       url: import.meta.env.SUPABASE_URL || '',
       serviceRoleKey: import.meta.env.SUPABASE_SERVICE_ROLE_KEY || '',
       avatarBucket: import.meta.env.SUPABASE_AVATAR_BUCKET || 'customer-avatars',
-      passportBucket: import.meta.env.SUPABASE_PASSPORT_BUCKET || 'customer-passports'
+      passportBucket: import.meta.env.SUPABASE_PASSPORT_BUCKET || 'customer-passports',
+      documentTemplateBucket: import.meta.env.SUPABASE_DOCUMENT_TEMPLATE_BUCKET || 'document-templates'
     },
     public: {
       supabaseUrl: import.meta.env.NUXT_PUBLIC_SUPABASE_URL || import.meta.env.SUPABASE_URL || '',

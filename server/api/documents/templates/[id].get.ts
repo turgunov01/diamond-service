@@ -1,0 +1,72 @@
+﻿import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
+import {
+  downloadStorageObject,
+  getSupabaseErrorData,
+  mapTemplateDbRowToRecord,
+  type DocumentTemplateDbRow
+} from '../documents'
+import type { H3Event } from 'h3'
+
+function parseTemplateId(event: H3Event) {
+  const rawId = getRouterParam(event, 'id')
+  const templateId = Number(rawId)
+  if (!rawId || !Number.isInteger(templateId) || templateId <= 0) {
+    throw createError({ statusCode: 400, statusMessage: 'Invalid template id.' })
+  }
+
+  return templateId
+}
+
+export default eventHandler(async (event) => {
+  const templateId = parseTemplateId(event)
+  const { url, serviceRoleKey, documentTemplateBucket } = getSupabaseServerConfig()
+
+  let rows: DocumentTemplateDbRow[]
+  try {
+    rows = await $fetch<DocumentTemplateDbRow[]>(`${url}/rest/v1/document_templates`, {
+      headers: getSupabaseServerHeaders(serviceRoleKey),
+      query: {
+        select: 'id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
+        id: `eq.${templateId}`,
+        limit: 1
+      }
+    })
+  } catch (error: unknown) {
+    const data = getSupabaseErrorData(error)
+
+    if (data?.code === '42P01') {
+      throw createError({
+        statusCode: 500,
+        statusMessage: 'Table "document_templates" is missing. Run db/supabase/documents.sql first.'
+      })
+    }
+
+    throw error
+  }
+
+  const row = rows[0]
+  if (!row) {
+    throw createError({ statusCode: 404, statusMessage: 'Template not found.' })
+  }
+
+  const projectRaw = await downloadStorageObject({
+    url,
+    serviceRoleKey,
+    bucket: documentTemplateBucket,
+    path: row.storage_path,
+    downloadErrorMessage: 'Template project file is missing in storage.'
+  })
+
+  let parsedProject: unknown = null
+  try {
+    parsedProject = JSON.parse(projectRaw)
+  } catch {
+    parsedProject = null
+  }
+
+  return {
+    ...mapTemplateDbRowToRecord(row),
+    projectData: parsedProject
+  }
+})
+

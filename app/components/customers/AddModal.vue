@@ -58,7 +58,6 @@ const { data } = await useFetch<Position[]>("/api/zones", {
   default: () => [],
 });
 
-// edited: transform into label/value format
 const positionOptions = computed(() =>
   (data.value || []).map((p) => ({
     label: p.name,
@@ -66,11 +65,7 @@ const positionOptions = computed(() =>
   }))
 );
 
-console.log("Загруженные зоны для позиций:", positionOptions.value);
-
-/* ===============================
-   HELPERS
-================================ */
+// console.log("Загруженные зоны для позиций:", positionOptions.value);
 
 const toast = useToast();
 
@@ -103,10 +98,6 @@ function onPassportFileChange(event: Event) {
   passportFile.value = input.files?.[0] || null;
 }
 
-/* ===============================
-   SUBMIT
-================================ */
-
 async function onSubmit(event: FormSubmitEvent<Schema>) {
   if (loading.value) return;
 
@@ -127,7 +118,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
     form.append("age", String(event.data.age));
     form.append("workShift", event.data.workShift);
 
-    // edited: sending IDs array
     form.append("objectPositions", JSON.stringify(event.data.objectPositions));
 
     form.append("avatarFile", avatarFile.value);
@@ -210,10 +200,6 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             @change="onPassportFileChange"
           />
         </UFormField>
-
-        <!-- <UFormField label="Возраст" name="age">
-          <UInput v-model="state.age" type="number" class="w-full" />
-        </UFormField> -->
 
         <UFormField label="Смена" name="workShift">
           <USelect

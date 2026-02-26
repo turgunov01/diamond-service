@@ -3,6 +3,7 @@ interface SupabaseServerConfig {
   serviceRoleKey: string
   avatarBucket: string
   passportBucket: string
+  documentTemplateBucket: string
 }
 
 function normalizeUrl(value: string) {
@@ -15,6 +16,7 @@ export function getSupabaseServerConfig(): SupabaseServerConfig {
   const serviceRoleKey = config.supabase?.serviceRoleKey
   const avatarBucket = config.supabase?.avatarBucket
   const passportBucket = config.supabase?.passportBucket
+  const documentTemplateBucket = config.supabase?.documentTemplateBucket
 
   if (typeof url !== 'string' || !url.length) {
     throw createError({
@@ -34,7 +36,10 @@ export function getSupabaseServerConfig(): SupabaseServerConfig {
     url: normalizeUrl(url),
     serviceRoleKey,
     avatarBucket: typeof avatarBucket === 'string' && avatarBucket.length ? avatarBucket : 'customer-avatars',
-    passportBucket: typeof passportBucket === 'string' && passportBucket.length ? passportBucket : 'customer-passports'
+    passportBucket: typeof passportBucket === 'string' && passportBucket.length ? passportBucket : 'customer-passports',
+    documentTemplateBucket: typeof documentTemplateBucket === 'string' && documentTemplateBucket.length
+      ? documentTemplateBucket
+      : 'document-templates'
   }
 }
 

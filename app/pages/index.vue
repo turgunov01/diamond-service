@@ -6,11 +6,11 @@ import type { Period, Range } from '~/types'
 const { isNotificationsSlideoverOpen } = useDashboard()
 
 const items = [[{
-  label: 'New mail',
+  label: 'Новая заявка',
   icon: 'i-lucide-send',
   to: '/inbox'
 }, {
-  label: 'New customer',
+  label: 'Новый сотрудник',
   icon: 'i-lucide-user-plus',
   to: '/hr'
 }]] satisfies DropdownMenuItem[][]
@@ -31,7 +31,7 @@ const period = ref<Period>('daily')
         </template>
 
         <template #right>
-          <UTooltip text="Notifications" :shortcuts="['N']">
+          <UTooltip text="Уведомления" :shortcuts="['N']">
             <UButton
               color="neutral"
               variant="ghost"
@@ -52,10 +52,8 @@ const period = ref<Period>('daily')
 
       <UDashboardToolbar>
         <template #left>
-          <!-- NOTE: The `-ms-1` class is used to align with the `DashboardSidebarCollapse` button here. -->
           <HomeDateRangePicker v-model="range" class="-ms-1" />
 
-          <HomePeriodSelect v-model="period" :range="range" />
         </template>
       </UDashboardToolbar>
     </template>

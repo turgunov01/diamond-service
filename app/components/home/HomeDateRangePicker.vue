@@ -9,12 +9,12 @@ const df = new DateFormatter('en-US', {
 const selected = defineModel<Range>({ required: true })
 
 const ranges = [
-  { label: 'Last 7 days', days: 7 },
-  { label: 'Last 14 days', days: 14 },
-  { label: 'Last 30 days', days: 30 },
-  { label: 'Last 3 months', months: 3 },
-  { label: 'Last 6 months', months: 6 },
-  { label: 'Last year', years: 1 }
+  { label: 'Последние 7 дней', days: 7 },
+  { label: 'Последние 14 дней', days: 14 },
+  { label: 'Последние 30 дней', days: 30 },
+  { label: 'Последние 3 месяца', months: 3 },
+  { label: 'Последние 6 месяцев', months: 6 },
+  { label: 'Последний год', years: 1 }
 ]
 
 const toCalendarDate = (date: Date) => {
@@ -95,7 +95,7 @@ const selectRange = (range: { days?: number, months?: number, years?: number }) 
           </template>
         </template>
         <template v-else>
-          Pick a date
+          Выберите дату
         </template>
       </span>
 
@@ -125,6 +125,7 @@ const selectRange = (range: { days?: number, months?: number, years?: number }) 
           class="p-2"
           :number-of-months="2"
           range
+          locale="ru-RU"
         />
       </div>
     </template>

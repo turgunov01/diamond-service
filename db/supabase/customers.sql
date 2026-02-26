@@ -30,6 +30,9 @@ alter table public.customers
 alter table public.customers
   add column if not exists salary_currency text not null default 'UZS';
 
+create unique index if not exists customers_phone_number_unique_idx
+on public.customers(phone_number);
+
 alter table public.customers enable row level security;
 
 insert into storage.buckets (id, name, public)
