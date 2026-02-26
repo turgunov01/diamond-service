@@ -32,7 +32,8 @@ export interface Stat {
   title: string
   icon: string
   value: number | string
-  variation: number
+  variation: number,
+  href?: string,
   formatter?: (value: number) => string
 }
 

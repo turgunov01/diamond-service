@@ -488,6 +488,7 @@ async function saveCustomerSalary(customer: Customer) {
 
             <div class="flex flex-wrap items-center gap-1.5">
               <CustomersAddModal />
+              <CustomersBulkImport />
               <CustomersDeleteModal
                 :count="table?.tableApi?.getFilteredSelectedRowModel().rows.length"
                 :loading="deletingSelected"

@@ -5,9 +5,9 @@ type SidebarLinks = NavigationMenuItem[][]
 const links: SidebarLinks = [
     [
         {
-            label: 'Главная страница',
-            icon: 'i-lucide-house',
-            to: '/'
+            label: 'Дашбоард',
+            icon: 'i-lucide-line-chart',
+            to: '/',
         },
         {
             label: 'Заявки',
@@ -18,7 +18,25 @@ const links: SidebarLinks = [
         {
             label: 'HR',
             icon: 'i-lucide-users',
-            to: '/hr'
+            to: '/hr',
+            defaultOpen: false,
+            type: 'trigger',
+            children: [
+                {
+                    label: 'Сотрудники',
+                    to: '/hr',
+                    exact: true
+                },
+                {
+                    label: 'Договоры',
+                    to: '/documents',
+                    exact: true
+                },
+                {
+                    label: 'Расходы',
+                    to: '/expenses'
+                }
+            ]
         },
         {
             label: 'Объекты',
@@ -29,7 +47,7 @@ const links: SidebarLinks = [
             label: 'Настройки',
             to: '/settings',
             icon: 'i-lucide-settings',
-            defaultOpen: true,
+            defaultOpen: false,
             type: 'trigger',
             children: [
                 {
