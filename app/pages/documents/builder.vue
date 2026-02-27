@@ -221,9 +221,6 @@ async function saveTemplate() {
 
 onMounted(async () => {
   await initEditor()
-  if (currentTemplateId.value) {
-    await loadTemplate()
-  }
 })
 
 onBeforeUnmount(() => {
