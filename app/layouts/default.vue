@@ -36,6 +36,16 @@ const groups = computed(() => [
   }
 ])
 
+const activeObject = useState<{ id: number, name: string } | null>('active-object', () => null)
+const { data: objects } = await useFetch<{ id: number, name: string }[]>('/api/objects', {
+  default: () => []
+})
+
+watch(objects, (list) => {
+  if (activeObject.value || !list?.length) return
+  activeObject.value = { id: list[0].id, name: list[0].name }
+})
+
 onMounted(async () => {
   const cookie = useCookie('cookie-consent')
   if (cookie.value === 'accepted') {
@@ -67,7 +77,7 @@ onMounted(async () => {
 
 <template>
   <UDashboardGroup unit="rem">
-    <UDashboardSidebar
+  <UDashboardSidebar
       id="default"
       v-model:open="open"
       collapsible

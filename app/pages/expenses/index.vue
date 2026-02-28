@@ -56,7 +56,9 @@ const categories = [
   'Командировки'
 ]
 
-const { data, error, refresh } = await useFetch<ExpensesResponse>('/api/expenses', {
+const activeObject = useState<{ id: number, name: string } | null>('active-object')
+
+const { data, error, refresh, execute } = await useFetch<ExpensesResponse>('/api/expenses', {
   default: () => ({
     items: [],
     summary: {
@@ -69,8 +71,18 @@ const { data, error, refresh } = await useFetch<ExpensesResponse>('/api/expenses
         paid: 0
       }
     }
-  })
+  }),
+  query: {
+    objectId: computed(() => activeObject.value?.id)
+  },
+  immediate: false
 })
+
+watch(activeObject, (val) => {
+  if (val?.id) {
+    execute()
+  }
+}, { immediate: true })
 
 watch(error, (value) => {
   if (!value) {
@@ -137,12 +149,18 @@ async function createExpense() {
     return
   }
 
+  if (!activeObject.value?.id) {
+    toast.add({ title: 'Выберите объект перед созданием расхода', color: 'warning' })
+    return
+  }
+
   creating.value = true
 
   try {
     await $fetch('/api/expenses', {
       method: 'POST',
       body: {
+        objectId: activeObject.value?.id,
         title: newExpense.title,
         category: newExpense.category,
         vendor: newExpense.vendor,

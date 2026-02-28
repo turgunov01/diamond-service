@@ -3,6 +3,17 @@ import * as z from 'zod'
 import type { FormSubmitEvent } from '@nuxt/ui'
 
 const fileRef = ref<HTMLInputElement>()
+const allowedCurrencies = ['UZS', 'USD', 'EUR', 'RUB'] as const
+type CurrencyCode = (typeof allowedCurrencies)[number]
+
+const currency = useState<CurrencyCode>('dashboard-currency', () => 'UZS')
+
+const currencyOptions = [
+  { label: 'Сумы (UZS)', value: 'UZS' },
+  { label: 'Доллары (USD)', value: 'USD' },
+  { label: 'Евро (EUR)', value: 'EUR' },
+  { label: 'Рубли (RUB)', value: 'RUB' }
+]
 
 const profileSchema = z.object({
   name: z.string().min(2, 'Too short'),
@@ -82,7 +93,23 @@ function onFileClick() {
           v-model="profile.name"
           autocomplete="off"
         />
-      </UFormField>
+    </UFormField>
+    <USeparator />
+    <UFormField
+      name="currency"
+      label="Валюта по умолчанию"
+      description="Используется в статистике и revenue."
+      class="flex max-sm:flex-col justify-between items-start gap-4"
+      :ui="{ container: 'w-full' }"
+    >
+      <USelect
+        v-model="currency"
+        :items="currencyOptions"
+        option-attribute="label"
+        value-attribute="value"
+        class="w-56"
+      />
+    </UFormField>
       <USeparator />
       <UFormField
         name="email"

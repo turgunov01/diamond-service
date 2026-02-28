@@ -16,13 +16,20 @@ interface ExpenseResponse {
   summary: ExpenseSummary
 }
 
-export default eventHandler(async (): Promise<ExpenseResponse> => {
+export default eventHandler(async (event): Promise<ExpenseResponse> => {
   const { url, serviceRoleKey } = getSupabaseServerConfig()
+
+  const objectIdRaw = getQuery(event).objectId
+  const objectId = objectIdRaw ? Number(objectIdRaw) : NaN
+  if (!Number.isInteger(objectId) || objectId <= 0) {
+    throw createError({ statusCode: 400, statusMessage: 'objectId query param is required' })
+  }
 
   const rows = await $fetch<ExpenseDbRow[]>(`${url}/rest/v1/expenses`, {
     headers: getSupabaseServerHeaders(serviceRoleKey),
     query: {
       select: 'id,title,category,vendor,planned_amount,actual_amount,currency,due_date,status,notes,created_at,updated_at',
+      object_id: `eq.${objectId}`,
       order: 'id.desc'
     }
   })
