@@ -54,6 +54,7 @@ const selectedTemplateId = ref<number | undefined>()
 const selectedRecipientIds = ref<number[]>([])
 const sending = ref(false)
 const exporting = ref(false)
+const deletingId = ref<number | null>(null)
 
 const tabs = [
   { label: 'Шаблоны', value: 'templates' },
@@ -207,6 +208,29 @@ function editTemplate(templateId: number) {
   navigateTo(`/documents/builder?templateId=${templateId}`)
 }
 
+async function deleteTemplate(templateId: number) {
+  if (deletingId.value) return
+  deletingId.value = templateId
+  try {
+    await $fetch(`/api/documents/${templateId}`, {
+      method: 'DELETE'
+    })
+    toast.add({
+      title: 'Шаблон удален',
+      color: 'success'
+    })
+    await refresh()
+  } catch (err: unknown) {
+    toast.add({
+      title: 'Не удалось удалить шаблон',
+      description: getErrorMessage(err) || 'Попробуйте позже.',
+      color: 'error'
+    })
+  } finally {
+    deletingId.value = null
+  }
+}
+
 async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
   if (exporting.value) {
     return
@@ -342,6 +366,15 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                 size="sm"
                 icon="i-lucide-send"
                 @click="openSendModal(template.id)"
+              />
+              <UButton
+                label="Удалить"
+                size="sm"
+                color="error"
+                variant="outline"
+                icon="i-lucide-trash"
+                :loading="deletingId === template.id"
+                @click="deleteTemplate(template.id)"
               />
             </div>
           </div>

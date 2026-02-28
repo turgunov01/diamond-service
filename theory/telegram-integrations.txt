@@ -1,0 +1,75 @@
+Интеграция Telegram ↔ Nuxt/Nitro (теоретический план)
+
+Цели
+- Дублировать чаты Telegram (группы и личные) в раздел «Чаты» Nuxt.
+- Отправлять сообщения из Nuxt обратно в Telegram.
+- Поддерживать два сценария: бот (группы/каналы) и аккаунт по номеру (user/TDLib).
+
+Компоненты
+1) Сервис интеграции (на сервере: Nitro-роуты или отдельный сервис):
+   - Вебхук Bot API: /api/telegram/webhook (POST от Telegram).
+   - Опционально TDLib/MTProto-воркер для входящих на номер телефона.
+   - Отправка: sendToTelegram({ tgChatId, text }) через Bot API (группы) или TDLib (user).
+   - Маппинг: таблица chats (id, tg_chat_id, tg_type, title, object_id, is_group, updated_at).
+   - Сообщения: chat_messages (id, chat_id, external_id, author_id, content, created_at, direction[in/out], object_id, status).
+
+2) Nuxt/Nitro endpoints
+   - GET /api/chats?objectId=… : расширить, чтобы отдавать tg_chat_id и тип.
+   - GET /api/chats/:id?objectId=… : возвращать сообщения + tg-мэп.
+   - POST /api/chats/:id/messages : дописать логику:
+       a) писать в БД;
+       b) если есть tg_chat_id — вызывать sendToTelegram.
+   - POST /api/telegram/webhook : принимать апдейты Telegram, нормализовать, писать в БД.
+
+3) Фронтенд (Nuxt)
+   - Текущий UI чатов: on send → POST /api/chats/:id/messages; сервер шлёт в Telegram.
+   - Получение сообщений через useFetch; позже можно добавить polling/SSE.
+
+Маршрутизация апдейтов Telegram (Bot API)
+1) Создать бота, поставить вебхук на https://<домен>/api/telegram/webhook.
+2) При update:
+   - Извлечь chat.id, chat.type, text, from.id, message_id, date.
+   - Найти/создать внутренний чат по tg_chat_id; привязать object_id (по конфигу/боту/тенанту).
+   - Записать chat_messages: external_id=message_id, author_id=from.id, content=text, direction='in', object_id.
+   - Обновить chats.updated_at.
+
+Маршрутизация через TDLib (аккаунт по номеру)
+1) Запустить TDLib-воркер (лучше отдельный хост, не serverless).
+2) На updateNewMessage → нормализовать, отправить в Nitro (внутренний API/очередь) → записать в БД.
+
+Отправка из Nuxt в Telegram
+- POST /api/chats/:id/messages:
+  - Найти chat.tg_chat_id, tg_type.
+  - Если есть — sendMessage (Bot API) или TDLib sendMessage.
+  - Сохранить в БД с direction='out', external_id = Telegram message_id.
+  - При ошибке status='error'.
+
+Изменения в модели данных
+- chats: добавить tg_chat_id (bigint), tg_type (private/group/supergroup/channel), object_id, updated_at.
+- chat_messages: добавить external_id (bigint), direction ('in'|'out'), status ('sent'|'delivered'|'error'), object_id.
+- Опционально chat_members для маппинга пользователей Telegram.
+
+Безопасность / валидация
+- Проверять подпись вебхука (X-Telegram-Bot-Api-Secret-Token, если задан).
+- Разрешать только whitelisted tg_chat_id или маппить на object_id и отвергать лишнее.
+
+Развёртывание (Netlify + Nitro)
+- Bot API вебхук работает как серверный маршрут Nitro (Netlify Functions).
+- TDLib тяжёлый — лучше отдельный контейнер/VPS, общение по HTTPS.
+- BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET держать в переменных окружения.
+
+Эксплуатация
+- Идемпотентность: использовать update_id для пропуска дублей.
+- Бэкфил: опциональный скрипт getUpdates/getChatHistory.
+- Ретраи: при ошибке отправки — экспоненциальный backoff, лимит попыток.
+
+MVP (минимальный путь)
+1) Только Bot API (без DM на номер).
+2) Добавить tg_chat_id/tg_type в chats.
+3) Сделать /api/telegram/webhook, чтобы писать входящие в chat_messages.
+4) При отправке из UI звать sendMessage и писать исходящее в chat_messages.
+
+Дальнейшие улучшения
+- SSE/WebSocket для live‑обновлений.
+- TDLib-воркер для входящих на номер.
+- Медиа: хранить file_id, подтягивать через getFile при необходимости.
