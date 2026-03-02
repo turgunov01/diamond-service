@@ -6,6 +6,22 @@ type TgChat = { id: number, type: string, title?: string, first_name?: string, l
 type TgMessage = { message_id: number, from?: TgUser, chat: TgChat, text?: string, date: number }
 type TgUpdate = { update_id: number, message?: TgMessage }
 
+type TelegramBindingRow = {
+  object_id: number
+  is_active?: boolean | null
+}
+
+type ExistingChatRow = {
+  id: number
+  object_id?: number | null
+  title: string
+  tg_type?: string | null
+}
+
+type ExistingMessageRow = {
+  id: number
+}
+
 export default eventHandler(async (event) => {
   if (!verifyTelegramSecret(event)) {
     throw createError({ statusCode: 401, statusMessage: 'Invalid webhook secret' })
@@ -20,30 +36,62 @@ export default eventHandler(async (event) => {
   const chat = msg.chat
   const text = msg.text
   if (!text) {
-    return { ok: true } // ignore non-text for now
+    return { ok: true }
   }
 
   const { url, serviceRoleKey } = getSupabaseServerConfig()
   const headers = getSupabaseServerHeaders(serviceRoleKey)
 
-  // ensure chat exists
-  const existingChats = await $fetch<any[]>(`${url}/rest/v1/chats`, {
+  let objectId = getDefaultObjectId()
+
+  const bindings = await $fetch<TelegramBindingRow[]>(`${url}/rest/v1/telegram_group_bindings`, {
     headers,
     query: {
-      select: '*',
+      select: 'object_id,is_active',
+      tg_chat_id: `eq.${chat.id}`,
+      is_active: 'eq.true',
+      limit: 1
+    }
+  }).catch(() => [] as TelegramBindingRow[])
+
+  if (bindings[0]?.object_id) {
+    objectId = bindings[0].object_id
+  }
+
+  const title = chat.title || chat.username || chat.first_name || 'Telegram chat'
+  const existingChats = await $fetch<ExistingChatRow[]>(`${url}/rest/v1/chats`, {
+    headers,
+    query: {
+      select: 'id,object_id,title,tg_type',
       tg_chat_id: `eq.${chat.id}`,
       limit: 1
     }
   })
 
-  const objectId = getDefaultObjectId()
   let chatId: number
 
-  if (existingChats.length) {
-    chatId = existingChats[0].id
+  const existingChat = existingChats[0]
+
+  if (existingChat) {
+    chatId = existingChat.id
+
+    if (existingChat.object_id !== objectId || existingChat.title !== title || existingChat.tg_type !== chat.type) {
+      await $fetch(`${url}/rest/v1/chats`, {
+        method: 'PATCH',
+        headers,
+        query: {
+          id: `eq.${chatId}`
+        },
+        body: {
+          object_id: objectId,
+          title,
+          tg_type: chat.type,
+          updated_at: new Date().toISOString()
+        }
+      })
+    }
   } else {
-    const title = chat.title || chat.username || chat.first_name || 'Telegram chat'
-    const inserted = await $fetch<any[]>(`${url}/rest/v1/chats`, {
+    const inserted = await $fetch<ExistingChatRow[]>(`${url}/rest/v1/chats`, {
       method: 'POST',
       headers: {
         ...headers,
@@ -57,10 +105,27 @@ export default eventHandler(async (event) => {
         object_id: objectId
       }
     })
-    chatId = inserted[0]?.id
-    if (!chatId) {
+
+    const createdChat = inserted[0]
+    if (!createdChat?.id) {
       throw createError({ statusCode: 500, statusMessage: 'Failed to upsert chat for Telegram' })
     }
+
+    chatId = createdChat.id
+  }
+
+  const existingMessages = await $fetch<ExistingMessageRow[]>(`${url}/rest/v1/chat_messages`, {
+    headers,
+    query: {
+      select: 'id',
+      chat_id: `eq.${chatId}`,
+      external_id: `eq.${msg.message_id}`,
+      limit: 1
+    }
+  }).catch(() => [] as ExistingMessageRow[])
+
+  if (existingMessages.length) {
+    return { ok: true, duplicate: true, chatId }
   }
 
   await $fetch(`${url}/rest/v1/chat_messages`, {
@@ -77,5 +142,16 @@ export default eventHandler(async (event) => {
     }
   })
 
-  return { ok: true }
+  await $fetch(`${url}/rest/v1/chats`, {
+    method: 'PATCH',
+    headers,
+    query: {
+      id: `eq.${chatId}`
+    },
+    body: {
+      updated_at: new Date().toISOString()
+    }
+  })
+
+  return { ok: true, chatId, objectId }
 })

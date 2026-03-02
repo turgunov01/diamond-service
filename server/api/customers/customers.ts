@@ -2,6 +2,7 @@ export type WorkShift = 'day' | 'night'
 
 export interface CustomerRecord {
   id: number
+  buildingId?: number | null
   username: string
   avatar: {
     src: string
@@ -19,6 +20,7 @@ export interface CustomerRecord {
 }
 
 export interface CreateCustomerBody {
+  buildingId?: number | null
   username: string
   avatar: {
     src: string
@@ -36,13 +38,21 @@ export interface CreateCustomerBody {
 }
 
 export interface UpdateCustomerBody {
+  buildingId?: number | null
+  username?: string
+  password?: string
+  phoneNumber?: string
+  age?: number
   workShift?: WorkShift
+  objectPinned?: string
+  objectPositions?: string[]
   baseSalary?: number
   positionBonus?: number
 }
 
 export interface CustomerDbRow {
   id: number
+  building_id?: number | null
   username: string
   avatar: string
   password: string
@@ -60,6 +70,7 @@ export interface CustomerDbRow {
 export function mapCustomerDbRowToRecord(row: CustomerDbRow): CustomerRecord {
   return {
     id: row.id,
+    buildingId: row.building_id ?? null,
     username: row.username,
     avatar: { src: row.avatar },
     password: row.password,
@@ -78,6 +89,7 @@ export function mapCustomerDbRowToRecord(row: CustomerDbRow): CustomerRecord {
 export function mapCreateBodyToDbInsert(body: CreateCustomerBody) {
   return {
     username: body.username,
+    building_id: body.buildingId ?? null,
     avatar: body.avatar.src,
     password: body.password,
     phone_number: body.phoneNumber,
@@ -94,13 +106,41 @@ export function mapCreateBodyToDbInsert(body: CreateCustomerBody) {
 
 export function mapUpdateBodyToDbUpdate(body: UpdateCustomerBody) {
   const update: {
+    username?: string
+    building_id?: number | null
+    password?: string
+    phone_number?: string
+    age?: number
     work_shift?: WorkShift
+    object_pinned?: string
+    object_positions?: string[]
     base_salary?: number
     position_bonus?: number
   } = {}
 
+  if (body.username) {
+    update.username = body.username
+  }
+  if (body.buildingId !== undefined) {
+    update.building_id = body.buildingId
+  }
+  if (body.password) {
+    update.password = body.password
+  }
+  if (body.phoneNumber) {
+    update.phone_number = body.phoneNumber
+  }
+  if (typeof body.age === 'number') {
+    update.age = body.age
+  }
   if (body.workShift) {
     update.work_shift = body.workShift
+  }
+  if (body.objectPinned !== undefined) {
+    update.object_pinned = body.objectPinned
+  }
+  if (body.objectPositions) {
+    update.object_positions = body.objectPositions
   }
   if (typeof body.baseSalary === 'number') {
     update.base_salary = body.baseSalary

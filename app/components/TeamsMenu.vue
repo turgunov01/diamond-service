@@ -1,68 +1,214 @@
 <script setup lang="ts">
 import type { DropdownMenuItem } from '@nuxt/ui'
 
+type BuildingItem = {
+  id: number
+  name: string
+  logo?: string | null
+  description?: string | null
+}
+
 defineProps<{
   collapsed?: boolean
 }>()
 
-const teams = ref([{
-  label: 'Tashkent City Mall',
-  avatar: {
-    src: 'https://api.logobank.uz/media/logos_preview/TCM-01.jpg',
-    alt: 'Tashkent City Mall'
+const router = useRouter()
+const toast = useToast()
+const creating = ref(false)
+const createBuildingOpen = ref(false)
+const activeBuilding = useState<BuildingItem | null>('active-building', () => null)
+const BUILDING_NAME_MAX_LENGTH = 40
+
+const form = reactive({
+  name: '',
+  logo: '',
+  description: ''
+})
+
+const { data: buildings, refresh } = await useFetch<BuildingItem[]>('/api/buildings', {
+  default: () => []
+})
+
+const selectedBuilding = computed(() => activeBuilding.value || buildings.value[0] || null)
+
+function resetForm() {
+  form.name = ''
+  form.logo = ''
+  form.description = ''
+}
+
+function getErrorMessage(error: unknown) {
+  if (error && typeof error === 'object') {
+    const err = error as { data?: { statusMessage?: string }, message?: string }
+    return err.data?.statusMessage || err.message
   }
-}, {
-  label: 'Summit Business Center',
-  avatar: {
-    src: 'https://bcsummit.uz/dist/assets/images/logo.svg',
-    alt: 'Summit Business Center'
+
+  return undefined
+}
+
+function limitBuildingName(name: string) {
+  const normalized = name.trim()
+
+  if (normalized.length <= BUILDING_NAME_MAX_LENGTH) {
+    return normalized
   }
-}, {
-  label: 'JW Marriott Hotel Tashkent',
-  avatar: {
-    src: 'https://banner2.cleanpng.com/20180603/bvg/avonlllgv.webp',
-    alt: 'JW Marriott Hotel Tashkent'
+
+  return `${normalized.slice(0, BUILDING_NAME_MAX_LENGTH - 1)}…`
+}
+
+async function createBuilding() {
+  if (creating.value) {
+    return
   }
-}])
-const selectedTeam = ref(teams.value[0])
+
+  if (!form.name.trim()) {
+    toast.add({
+      title: 'Building name is required',
+      color: 'warning'
+    })
+    return
+  }
+
+  creating.value = true
+
+  try {
+    const created = await $fetch<BuildingItem>('/api/buildings', {
+      method: 'POST',
+      body: {
+        name: form.name.trim().slice(0, BUILDING_NAME_MAX_LENGTH),
+        logo: form.logo,
+        description: form.description
+      }
+    })
+
+    await refresh()
+    await refreshNuxtData('/api/buildings')
+    activeBuilding.value = created
+    createBuildingOpen.value = false
+    resetForm()
+
+    toast.add({
+      title: 'Building created',
+      description: created.name,
+      color: 'success'
+    })
+  } catch (error: unknown) {
+    toast.add({
+      title: 'Failed to create building',
+      description: getErrorMessage(error) || 'Check the building data and try again.',
+      color: 'error'
+    })
+  } finally {
+    creating.value = false
+  }
+}
 
 const items = computed<DropdownMenuItem[][]>(() => {
-  return [teams.value.map(team => ({
-    ...team,
+  const buildingItems = (buildings.value || []).map(building => ({
+    label: limitBuildingName(building.name),
+    avatar: building.logo
+      ? {
+          src: building.logo,
+          alt: building.name
+        }
+      : undefined,
     onSelect() {
-      selectedTeam.value = team
+      activeBuilding.value = building
     }
-  })), [{
-    label: 'Создать объект',
-    icon: 'i-lucide-circle-plus'
+  }))
+
+  return [buildingItems, [{
+    label: 'Create building',
+    icon: 'i-lucide-building-2',
+    onSelect() {
+      createBuildingOpen.value = true
+    }
   }, {
-    label: 'Мои объекты',
-    icon: 'i-lucide-cog'
+    label: 'Create object',
+    icon: 'i-lucide-circle-plus',
+    onSelect() {
+      router.push('/objects/create')
+    }
+  }, {
+    label: 'My objects',
+    icon: 'i-lucide-list',
+    onSelect() {
+      router.push('/objects')
+    }
   }]]
 })
 </script>
 
 <template>
-  <UDropdownMenu
-    :items="items"
-    :content="{ align: 'center', collisionPadding: 12 }"
-    :ui="{ content: collapsed ? 'w-40' : 'w-(--reka-dropdown-menu-trigger-width)' }"
-  >
-    <UButton
-      v-bind="{
-        ...selectedTeam,
-        label: collapsed ? undefined : selectedTeam?.label,
-        trailingIcon: collapsed ? undefined : 'i-lucide-chevrons-up-down'
-      }"
-      color="neutral"
-      variant="ghost"
-      block
-      :square="collapsed"
-      class="data-[state=open]:bg-elevated"
-      :class="[!collapsed && 'py-2']"
-      :ui="{
-        trailingIcon: 'text-dimmed'
-      }"
-    />
-  </UDropdownMenu>
+  <div class="space-y-2">
+    <UDropdownMenu
+      :items="items"
+      :content="{ align: 'center', collisionPadding: 12 }"
+      :ui="{ content: collapsed ? 'w-48' : 'w-(--reka-dropdown-menu-trigger-width)' }"
+    >
+      <UButton
+        :label="collapsed ? undefined : limitBuildingName(selectedBuilding?.name || 'Select building')"
+        :avatar="selectedBuilding?.logo ? { src: selectedBuilding.logo, alt: selectedBuilding.name } : undefined"
+        :trailing-icon="collapsed ? undefined : 'i-lucide-chevrons-up-down'"
+        color="neutral"
+        variant="ghost"
+        block
+        :square="collapsed"
+        class="data-[state=open]:bg-elevated"
+        :class="[!collapsed && 'py-2']"
+        :ui="{ trailingIcon: 'text-dimmed' }"
+      />
+    </UDropdownMenu>
+
+    <UModal
+      v-model:open="createBuildingOpen"
+      title="Create building"
+      description="Add a building and use it as the top-level workspace scope."
+    >
+      <template #body>
+        <div class="space-y-4">
+          <UFormField label="Name" required>
+            <UInput
+              v-model="form.name"
+              class="w-full"
+              :maxlength="BUILDING_NAME_MAX_LENGTH"
+              placeholder="Tashkent City Mall"
+            />
+          </UFormField>
+
+          <UFormField label="Logo URL">
+            <UInput
+              v-model="form.logo"
+              class="w-full"
+              placeholder="https://..."
+            />
+          </UFormField>
+
+          <UFormField label="Description">
+            <UTextarea
+              v-model="form.description"
+              class="w-full"
+              :rows="3"
+              placeholder="Short building description"
+            />
+          </UFormField>
+
+          <div class="flex justify-end gap-2">
+            <UButton
+              label="Cancel"
+              color="neutral"
+              variant="subtle"
+              :disabled="creating"
+              @click="createBuildingOpen = false"
+            />
+            <UButton
+              label="Create"
+              :loading="creating"
+              @click="createBuilding"
+            />
+          </div>
+        </div>
+      </template>
+    </UModal>
+  </div>
 </template>

@@ -1,13 +1,15 @@
-﻿import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
+import type { H3Event } from 'h3'
+import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
 import {
   getSupabaseErrorData,
   mapTemplateDbRowToRecord,
+  parseObjectIdInput,
   uploadStorageObject,
   type DocumentTemplateDbRow
 } from '../documents'
-import type { H3Event } from 'h3'
 
 interface UpdateTemplateBody {
+  objectId?: number
   name?: string
   description?: string
   contractType?: string
@@ -34,6 +36,7 @@ function parseUpdateBody(body: unknown): UpdateTemplateBody {
   const input = body as UpdateTemplateBody
 
   return {
+    objectId: input.objectId,
     name: typeof input.name === 'string' ? input.name.trim() : undefined,
     description: typeof input.description === 'string' ? input.description.trim() : undefined,
     contractType: typeof input.contractType === 'string' ? input.contractType.trim() : undefined,
@@ -46,13 +49,15 @@ function parseUpdateBody(body: unknown): UpdateTemplateBody {
 export default eventHandler(async (event) => {
   const templateId = parseTemplateId(event)
   const payload = parseUpdateBody(await readBody(event))
+  const objectId = parseObjectIdInput(payload.objectId)
   const { url, serviceRoleKey, documentTemplateBucket } = getSupabaseServerConfig()
 
   const rows = await $fetch<DocumentTemplateDbRow[]>(`${url}/rest/v1/document_templates`, {
     headers: getSupabaseServerHeaders(serviceRoleKey),
     query: {
-      select: 'id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
+      select: 'id,object_id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
       id: `eq.${templateId}`,
+      object_id: `eq.${objectId}`,
       limit: 1
     }
   })
@@ -69,6 +74,7 @@ export default eventHandler(async (event) => {
   const nextCss = payload.css !== undefined ? payload.css : existing.css
 
   const serializedProject = JSON.stringify({
+    objectId,
     name: nextName,
     description: nextDescription,
     contractType: nextContractType,
@@ -96,7 +102,8 @@ export default eventHandler(async (event) => {
         Prefer: 'return=representation'
       },
       query: {
-        id: `eq.${templateId}`
+        id: `eq.${templateId}`,
+        object_id: `eq.${objectId}`
       },
       body: {
         name: nextName,
@@ -137,4 +144,3 @@ export default eventHandler(async (event) => {
     throw error
   }
 })
-

@@ -36,6 +36,10 @@ function getRequiredString(value: unknown, fieldName: string) {
   return value.trim()
 }
 
+function getOptionalString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 function getSupabaseErrorData(error: unknown): SupabaseErrorData | undefined {
   if (!error || typeof error !== 'object') {
     return undefined
@@ -55,6 +59,23 @@ function parseAge(value: unknown) {
   }
 
   return age
+}
+
+function parseOptionalBuildingId(value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  const buildingId = typeof value === 'number' ? value : Number(value)
+
+  if (!Number.isInteger(buildingId) || buildingId <= 0) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'buildingId must be a positive integer.'
+    })
+  }
+
+  return buildingId
 }
 
 function parseOptionalMoney(value: unknown, fieldName: string) {
@@ -90,7 +111,7 @@ function parseObjectPositions(value: unknown) {
         return parsed.map(position => position.trim())
       }
     } catch {
-      // Если JSON не распарсился, используем парсер строки через запятую.
+      // If JSON parsing fails, fall back to comma-separated parsing.
     }
   }
 
@@ -134,7 +155,8 @@ function parseJsonBody(body: unknown): CreateCustomerBody {
     throw createError({ statusCode: 400, statusMessage: 'Поле workShift должно быть \'day\' или \'night\'.' })
   }
 
-  const objectPinned = getRequiredString(input.objectPinned, 'objectPinned')
+  const objectPinned = getOptionalString(input.objectPinned)
+  const buildingId = parseOptionalBuildingId(input.buildingId)
   const baseSalary = parseOptionalMoney(input.baseSalary, 'baseSalary')
   const positionBonus = parseOptionalMoney(input.positionBonus, 'positionBonus')
 
@@ -149,6 +171,7 @@ function parseJsonBody(body: unknown): CreateCustomerBody {
     phoneNumber,
     passportFile,
     age,
+    buildingId,
     workShift: input.workShift,
     objectPinned,
     objectPositions: input.objectPositions.map(position => position.trim()),
@@ -178,6 +201,10 @@ function encodeStoragePath(path: string) {
 
 function buildPublicObjectUrl(baseUrl: string, bucket: string, path: string) {
   return `${baseUrl}/storage/v1/object/public/${bucket}/${encodeStoragePath(path)}`
+}
+
+function serializePassportFiles(files: { front: string, back: string }) {
+  return JSON.stringify(files)
 }
 
 function getErrorStatusCode(error: unknown) {
@@ -263,7 +290,9 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
   const fields = new Map<string, string>()
   const decoder = new TextDecoder()
   let avatarFile: MultipartPart | undefined
-  let passportFile: MultipartPart | undefined
+  let legacyPassportFile: MultipartPart | undefined
+  let passportFrontFile: MultipartPart | undefined
+  let passportBackFile: MultipartPart | undefined
 
   for (const rawPart of form) {
     const part = rawPart as MultipartPart
@@ -276,7 +305,13 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
         avatarFile = part
       }
       if (part.name === 'passportFile') {
-        passportFile = part
+        legacyPassportFile = part
+      }
+      if (part.name === 'passportFrontFile') {
+        passportFrontFile = part
+      }
+      if (part.name === 'passportBackFile') {
+        passportBackFile = part
       }
       continue
     }
@@ -287,7 +322,8 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
   const username = getRequiredString(fields.get('username'), 'username')
   const password = getRequiredString(fields.get('password'), 'password')
   const phoneNumber = getRequiredString(fields.get('phoneNumber'), 'phoneNumber')
-  const objectPinned = getRequiredString(fields.get('objectPinned'), 'objectPinned')
+  const buildingId = parseOptionalBuildingId(fields.get('buildingId'))
+  const objectPinned = getOptionalString(fields.get('objectPinned'))
   const age = parseAge(fields.get('age'))
   const workShiftRaw = getRequiredString(fields.get('workShift'), 'workShift')
   const objectPositions = parseObjectPositions(fields.get('objectPositions'))
@@ -301,12 +337,21 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
   if (!avatarFile) {
     throw createError({ statusCode: 400, statusMessage: 'Поле avatarFile обязательно.' })
   }
-  if (!passportFile) {
-    throw createError({ statusCode: 400, statusMessage: 'Поле passportFile обязательно.' })
-  }
-
   if (!avatarFile.type?.startsWith('image/')) {
     throw createError({ statusCode: 400, statusMessage: 'Файл avatarFile должен быть изображением.' })
+  }
+
+  if (passportFrontFile && !passportBackFile) {
+    throw createError({ statusCode: 400, statusMessage: 'Поле passportBackFile обязательно.' })
+  }
+  if (passportBackFile && !passportFrontFile) {
+    throw createError({ statusCode: 400, statusMessage: 'Поле passportFrontFile обязательно.' })
+  }
+  if (!legacyPassportFile && !(passportFrontFile && passportBackFile)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле passportFile или оба passportFrontFile/passportBackFile обязательны.'
+    })
   }
 
   const { url, serviceRoleKey, avatarBucket, passportBucket } = getSupabaseServerConfig()
@@ -326,9 +371,7 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
   const safeUsername = sanitizePathSegment(username)
   const uniqueId = `${Date.now()}-${crypto.randomUUID()}`
   const avatarName = sanitizeFileName(avatarFile.filename || 'avatar')
-  const passportName = sanitizeFileName(passportFile.filename || 'passport')
   const avatarPath = `${safeUsername}/avatars/${uniqueId}-${avatarName}`
-  const passportPath = `${safeUsername}/passports/${uniqueId}-${passportName}`
 
   await uploadStorageObject({
     url,
@@ -338,14 +381,51 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
     data: avatarFile.data,
     contentType: avatarFile.type || 'application/octet-stream'
   })
-  await uploadStorageObject({
-    url,
-    serviceRoleKey,
-    bucket: passportBucket,
-    path: passportPath,
-    data: passportFile.data,
-    contentType: passportFile.type || 'application/octet-stream'
-  })
+
+  let passportFile: string
+
+  if (passportFrontFile && passportBackFile) {
+    const passportFrontName = sanitizeFileName(passportFrontFile.filename || 'passport-front')
+    const passportBackName = sanitizeFileName(passportBackFile.filename || 'passport-back')
+    const passportFrontPath = `${safeUsername}/passports/${uniqueId}-front-${passportFrontName}`
+    const passportBackPath = `${safeUsername}/passports/${uniqueId}-back-${passportBackName}`
+
+    await uploadStorageObject({
+      url,
+      serviceRoleKey,
+      bucket: passportBucket,
+      path: passportFrontPath,
+      data: passportFrontFile.data,
+      contentType: passportFrontFile.type || 'application/octet-stream'
+    })
+    await uploadStorageObject({
+      url,
+      serviceRoleKey,
+      bucket: passportBucket,
+      path: passportBackPath,
+      data: passportBackFile.data,
+      contentType: passportBackFile.type || 'application/octet-stream'
+    })
+
+    passportFile = serializePassportFiles({
+      front: `${passportBucket}/${passportFrontPath}`,
+      back: `${passportBucket}/${passportBackPath}`
+    })
+  } else {
+    const passportName = sanitizeFileName(legacyPassportFile!.filename || 'passport')
+    const passportPath = `${safeUsername}/passports/${uniqueId}-${passportName}`
+
+    await uploadStorageObject({
+      url,
+      serviceRoleKey,
+      bucket: passportBucket,
+      path: passportPath,
+      data: legacyPassportFile!.data,
+      contentType: legacyPassportFile!.type || 'application/octet-stream'
+    })
+
+    passportFile = `${passportBucket}/${passportPath}`
+  }
 
   return {
     username,
@@ -354,8 +434,9 @@ async function parseMultipartBody(event: H3Event): Promise<CreateCustomerBody> {
     },
     password,
     phoneNumber,
-    passportFile: `${passportBucket}/${passportPath}`,
+    passportFile,
     age,
+    buildingId,
     workShift: workShiftRaw,
     objectPinned,
     objectPositions,

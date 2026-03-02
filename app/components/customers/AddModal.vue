@@ -1,151 +1,297 @@
 <script setup lang="ts">
-import * as z from "zod";
-import type { FormSubmitEvent } from "@nuxt/ui";
+import * as z from 'zod'
+import type { FormSubmitEvent } from '@nuxt/ui'
 
-/* ===============================
-   SCHEMA
-================================ */
+type EditableCustomer = {
+  id: number
+  username: string
+  phoneNumber: string
+  age: number
+  workShift: 'day' | 'night'
+  objectPinned: string
+  objectPositions: string[]
+}
 
-const schema = z.object({
-  username: z.string().min(3, "Имя пользователя слишком короткое"),
-  password: z.string().min(6, "Пароль должен быть не менее 6 символов"),
-  phoneNumber: z.string().min(7, "Номер телефона слишком короткий"),
+type ObjectItem = {
+  id: number
+  name: string
+  description?: string | null
+  address?: string | null
+  code?: string | null
+}
+
+const props = withDefaults(defineProps<{
+  customer?: EditableCustomer | null
+  hideTrigger?: boolean
+}>(), {
+  customer: null,
+  hideTrigger: false
+})
+
+const emit = defineEmits<{
+  saved: []
+}>()
+
+const open = defineModel<boolean>('open', { default: false })
+const NOT_PINNED_VALUE = '__not_pinned__'
+
+const createSchema = z.object({
+  username: z.string().min(3, 'Имя пользователя слишком короткое'),
+  password: z.string().min(6, 'Пароль должен быть не менее 6 символов'),
+  phoneNumber: z.string().min(7, 'Номер телефона слишком короткий'),
   age: z.coerce
     .number()
-    .int("Возраст должен быть целым числом")
-    .min(18, "Возраст должен быть не менее 18"),
-  workShift: z.enum(["day", "night"]),
+    .int('Возраст должен быть целым числом')
+    .min(18, 'Возраст должен быть не менее 18'),
+  workShift: z.enum(['day', 'night']),
+  objectPinned: z.string().optional(),
+  objectPositions: z.array(z.string()).min(1, 'Выберите хотя бы один объект')
+})
 
-  // edited: now storing only IDs instead of full objects
-  objectPositions: z.array(z.number()).min(1, "Выберите хотя бы одну позицию"),
-});
+const editSchema = z.object({
+  username: z.string().min(3, 'Имя пользователя слишком короткое'),
+  password: z.string().refine(
+    value => !value.trim() || value.trim().length >= 6,
+    'Пароль должен быть не менее 6 символов'
+  ),
+  phoneNumber: z.string().min(7, 'Номер телефона слишком короткий'),
+  age: z.coerce
+    .number()
+    .int('Возраст должен быть целым числом')
+    .min(18, 'Возраст должен быть не менее 18'),
+  workShift: z.enum(['day', 'night']),
+  objectPinned: z.string().optional(),
+  objectPositions: z.array(z.string())
+})
 
-/* ===============================
-   STATE
-================================ */
-
-const open = ref(false);
-const loading = ref(false);
-const avatarFile = ref<File | null>(null);
-const passportFile = ref<File | null>(null);
-
-type Schema = z.output<typeof schema>;
-
-const state = reactive<Partial<Schema>>({
-  username: "",
-  password: "",
-  phoneNumber: "",
-  age: 18,
-  workShift: "day",
-
-  // edited: must be number[]
-  objectPositions: [],
-});
-
-/* ===============================
-   FETCH POSITIONS
-================================ */
-
-// edited: typed interface
-interface Position {
-  id: number;
-  name: string;
-  description: string;
-  createdAt: string;
+type FormState = {
+  username: string
+  password: string
+  phoneNumber: string
+  age: number
+  workShift: 'day' | 'night'
+  objectPinned: string
+  objectPositions: string[]
 }
 
-const { data } = await useFetch<Position[]>("/api/zones", {
+type FormSubmitState = {
+  username: string
+  password: string
+  phoneNumber: string
+  age: number
+  workShift: 'day' | 'night'
+  objectPinned?: string
+  objectPositions: string[]
+}
+
+const loading = ref(false)
+const avatarFile = ref<File | null>(null)
+const passportFrontFile = ref<File | null>(null)
+const passportBackFile = ref<File | null>(null)
+const toast = useToast()
+const activeBuilding = useState<{ id: number, name: string } | null>('active-building')
+
+const state = reactive<FormState>({
+  username: '',
+  password: '',
+  phoneNumber: '',
+  age: 18,
+  workShift: 'day',
+  objectPinned: '',
+  objectPositions: []
+})
+
+const isEditMode = computed(() => Boolean(props.customer?.id))
+const schema = computed(() => (isEditMode.value ? editSchema : createSchema))
+
+const { data: objects } = await useFetch<ObjectItem[]>('/api/objects', {
   default: () => [],
-});
+  query: {
+    buildingId: computed(() => activeBuilding.value?.id)
+  }
+})
 
-const positionOptions = computed(() =>
-  (data.value || []).map((p) => ({
-    label: p.name,
-    value: p.id,
+const objectOptions = computed(() =>
+  (objects.value || []).map(item => ({
+    label: item.name,
+    value: item.name
   }))
-);
+)
 
-// console.log("Загруженные зоны для позиций:", positionOptions.value);
+const pinnedObjectOptions = computed(() => [
+  { label: 'Not pinned', value: NOT_PINNED_VALUE },
+  ...objectOptions.value
+])
 
-const toast = useToast();
+const pinnedObjectModel = computed({
+  get: () => state.objectPinned || NOT_PINNED_VALUE,
+  set: (value: string) => {
+    state.objectPinned = value === NOT_PINNED_VALUE ? '' : value
+  }
+})
+
+function fillStateFromCustomer(customer?: EditableCustomer | null) {
+  state.username = customer?.username || ''
+  state.password = ''
+  state.phoneNumber = customer?.phoneNumber || ''
+  state.age = customer?.age ?? 18
+  state.workShift = customer?.workShift || 'day'
+  state.objectPinned = customer?.objectPinned || ''
+  state.objectPositions = [...(customer?.objectPositions || [])]
+  avatarFile.value = null
+  passportFrontFile.value = null
+  passportBackFile.value = null
+}
 
 function resetState() {
-  state.username = "";
-  state.password = "";
-  state.phoneNumber = "";
-  state.age = 18;
-  state.workShift = "day";
-  state.objectPositions = []; // edited
-  avatarFile.value = null;
-  passportFile.value = null;
+  fillStateFromCustomer(isEditMode.value ? props.customer : null)
 }
 
-function getErrorMessage(error: unknown) {
-  if (error && typeof error === "object") {
-    const err = error as { data?: { statusMessage?: string }; message?: string };
-    return err.data?.statusMessage || err.message;
+watch(
+  () => props.customer,
+  (customer) => {
+    if (isEditMode.value) {
+      fillStateFromCustomer(customer)
+    }
+  },
+  { immediate: true }
+)
+
+watch(open, (value) => {
+  if (!value) {
+    resetState()
+    return
   }
-  return undefined;
+
+  fillStateFromCustomer(isEditMode.value ? props.customer : null)
+})
+
+function getErrorMessage(error: unknown) {
+  if (error && typeof error === 'object') {
+    const err = error as { data?: { statusMessage?: string }, message?: string }
+    return err.data?.statusMessage || err.message
+  }
+
+  return undefined
 }
 
 function onAvatarFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  avatarFile.value = input.files?.[0] || null;
+  const input = event.target as HTMLInputElement
+  avatarFile.value = input.files?.[0] || null
 }
 
-function onPassportFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  passportFile.value = input.files?.[0] || null;
+function onPassportFrontFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  passportFrontFile.value = input.files?.[0] || null
 }
 
-async function onSubmit(event: FormSubmitEvent<Schema>) {
-  if (loading.value) return;
+function onPassportBackFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  passportBackFile.value = input.files?.[0] || null
+}
 
-  loading.value = true;
+function buildObjectPositions(positions: string[], pinned: string) {
+  const normalized = positions.map(item => item.trim()).filter(Boolean)
+
+  if (pinned.trim() && !normalized.includes(pinned.trim())) {
+    normalized.unshift(pinned.trim())
+  }
+
+  return normalized
+}
+
+function finalizeSubmit() {
+  setTimeout(() => {
+    open.value = false
+    emit('saved')
+  }, 0)
+}
+
+async function onSubmit(event?: FormSubmitEvent<FormSubmitState>) {
+  if (!event || loading.value) {
+    return
+  }
+
+  loading.value = true
 
   try {
-    if (!avatarFile.value) {
-      throw new Error("Файл аватара обязателен.");
-    }
-    if (!passportFile.value) {
-      throw new Error("Файл паспорта обязателен.");
+    if (!activeBuilding.value?.id) {
+      throw new Error('Select a building before saving a customer.')
     }
 
-    const form = new FormData();
-    form.append("username", event.data.username.trim());
-    form.append("password", event.data.password);
-    form.append("phoneNumber", event.data.phoneNumber.trim());
-    form.append("age", String(event.data.age));
-    form.append("workShift", event.data.workShift);
+    const objectPinned = event.data.objectPinned?.trim() || ''
+    const objectPositions = buildObjectPositions(event.data.objectPositions, event.data.objectPinned || '')
 
-    form.append("objectPositions", JSON.stringify(event.data.objectPositions));
+    if (!isEditMode.value && !objectPositions.length) {
+      throw new Error('Выберите хотя бы один объект.')
+    }
 
-    form.append("avatarFile", avatarFile.value);
-    form.append("passportFile", passportFile.value);
+    if (isEditMode.value && props.customer?.id) {
+      await $fetch(`/api/customers/${props.customer.id}`, {
+        method: 'PATCH',
+        body: {
+          buildingId: activeBuilding.value?.id ?? null,
+          username: event.data.username.trim(),
+          password: event.data.password.trim() || undefined,
+          phoneNumber: event.data.phoneNumber.trim(),
+          age: event.data.age,
+          workShift: event.data.workShift,
+          objectPinned,
+          objectPositions
+        }
+      })
 
-    await $fetch("/api/customers", {
-      method: "POST",
-      body: form,
-    });
+      toast.add({
+        title: 'Изменения сохранены',
+        description: `Пользователь @${event.data.username} обновлен`,
+        color: 'success'
+      })
+    } else {
+      if (!avatarFile.value) {
+        throw new Error('Файл аватара обязателен.')
+      }
+      if (!passportFrontFile.value) {
+        throw new Error('Файл лицевой стороны паспорта обязателен.')
+      }
+      if (!passportBackFile.value) {
+        throw new Error('Файл обратной стороны паспорта обязателен.')
+      }
 
-    toast.add({
-      title: "Успешно",
-      description: `Пользователь @${event.data.username} добавлен`,
-      color: "success",
-    });
+      const form = new FormData()
+      form.append('username', event.data.username.trim())
+      form.append('buildingId', String(activeBuilding.value?.id || ''))
+      form.append('password', event.data.password)
+      form.append('phoneNumber', event.data.phoneNumber.trim())
+      form.append('age', String(event.data.age))
+      form.append('workShift', event.data.workShift)
+      form.append('objectPinned', objectPinned)
+      form.append('objectPositions', JSON.stringify(objectPositions))
+      form.append('avatarFile', avatarFile.value)
+      form.append('passportFrontFile', passportFrontFile.value)
+      form.append('passportBackFile', passportBackFile.value)
 
-    resetState();
-    open.value = false;
-    await refreshNuxtData();
+      await $fetch('/api/customers', {
+        method: 'POST',
+        body: form
+      })
+
+      toast.add({
+        title: 'Успешно',
+        description: `Пользователь @${event.data.username} добавлен`,
+        color: 'success'
+      })
+    }
+
+    await refreshNuxtData('/api/customers')
+    finalizeSubmit()
   } catch (error: unknown) {
     toast.add({
-      title: "Не удалось создать клиента",
-      description:
-        getErrorMessage(error) || "Проверьте введенные данные и попробуйте снова.",
-      color: "error",
-    });
+      title: isEditMode.value ? 'Не удалось сохранить изменения' : 'Не удалось создать сотрудника',
+      description: getErrorMessage(error) || 'Проверьте введенные данные и попробуйте снова.',
+      color: 'error'
+    })
   } finally {
-    loading.value = false;
+    loading.value = false
   }
 }
 </script>
@@ -153,25 +299,35 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
 <template>
   <UModal
     v-model:open="open"
-    title="Добавить пользователя"
-    description="Добавьте пользователя в базу данных"
+    :title="isEditMode ? 'Редактировать пользователя' : 'Добавить пользователя'"
+    :description="isEditMode ? 'Измените данные сотрудника' : 'Добавьте сотрудника в базу данных'"
   >
-    <UButton label="Добавить пользователя" icon="i-lucide-plus" />
+    <UButton
+      v-if="!hideTrigger"
+      :label="isEditMode ? 'Редактировать пользователя' : 'Добавить пользователя'"
+      icon="i-lucide-plus"
+      @click="open = true"
+    />
 
     <template #body>
-      <UForm :schema="schema" :state="state" class="space-y-4" @submit="onSubmit">
+      <UForm
+        :schema="schema"
+        :state="state"
+        :on-submit="onSubmit"
+        class="space-y-4"
+      >
         <UFormField label="Имя пользователя" name="username">
           <UInput v-model="state.username" class="w-full" placeholder="alex.smith" />
         </UFormField>
 
-        <UFormField label="Файл аватара">
+        <UFormField v-if="!isEditMode" label="Файл аватара">
           <input
             class="w-full rounded-md border border-default bg-default px-3 py-2 text-sm"
             type="file"
             accept="image/*"
             :disabled="loading"
             @change="onAvatarFileChange"
-          />
+          >
         </UFormField>
 
         <UFormField label="Пароль" name="password">
@@ -179,7 +335,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             v-model="state.password"
             type="password"
             class="w-full"
-            placeholder="Надежный пароль"
+            :placeholder="isEditMode ? 'Оставьте пустым, чтобы не менять' : 'Надежный пароль'"
           />
         </UFormField>
 
@@ -187,27 +343,63 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
           <UInput
             v-model="state.phoneNumber"
             class="w-full"
-            placeholder="+1-202-555-0101"
+            placeholder="+998901112233"
           />
         </UFormField>
 
-        <UFormField label="Файл паспорта">
-          <input
-            class="w-full rounded-md border border-default bg-default px-3 py-2 text-sm"
-            type="file"
-            accept=".pdf,image/*"
-            :disabled="loading"
-            @change="onPassportFileChange"
+        <UFormField label="Возраст" name="age">
+          <UInput
+            v-model="state.age"
+            type="number"
+            min="18"
+            step="1"
+            class="w-full"
           />
         </UFormField>
+
+        <template v-if="!isEditMode">
+          <UFormField label="Паспорт: лицевая сторона">
+            <input
+              class="w-full rounded-md border border-default bg-default px-3 py-2 text-sm"
+              type="file"
+              accept=".pdf,image/*"
+              :disabled="loading"
+              @change="onPassportFrontFileChange"
+            >
+          </UFormField>
+
+          <UFormField label="Паспорт: обратная сторона">
+            <input
+              class="w-full rounded-md border border-default bg-default px-3 py-2 text-sm"
+              type="file"
+              accept=".pdf,image/*"
+              :disabled="loading"
+              @change="onPassportBackFileChange"
+            >
+          </UFormField>
+        </template>
 
         <UFormField label="Смена" name="workShift">
           <USelect
             v-model="state.workShift"
             :items="[
               { label: 'День', value: 'day' },
-              { label: 'Ночь', value: 'night' },
+              { label: 'Ночь', value: 'night' }
             ]"
+            class="w-full"
+          />
+        </UFormField>
+
+        <UFormField
+          v-if="isEditMode"
+          label="Закрепленный объект"
+          name="objectPinned"
+        >
+          <USelect
+            v-model="pinnedObjectModel"
+            :items="pinnedObjectOptions"
+            value-key="value"
+            label-key="label"
             class="w-full"
           />
         </UFormField>
@@ -215,13 +407,20 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
         <UFormField label="Позиции объекта" name="objectPositions">
           <USelectMenu
             v-model="state.objectPositions"
-            :options="positionOptions"
+            :items="objectOptions"
+            value-key="value"
+            label-key="label"
             multiple
-            searchable
-            placeholder="Выберите позиции"
+            placeholder="Выберите объекты"
             class="w-full"
           />
         </UFormField>
+
+        <p class="text-xs text-muted">
+          {{ isEditMode
+            ? 'Если закрепленный объект выбран, он будет добавлен в список позиций автоматически.'
+            : 'При создании достаточно выбрать позиции объекта. Закрепленный объект можно добавить позже при редактировании.' }}
+        </p>
 
         <div class="flex justify-end gap-2">
           <UButton
@@ -232,7 +431,7 @@ async function onSubmit(event: FormSubmitEvent<Schema>) {
             @click="open = false"
           />
           <UButton
-            label="Создать"
+            :label="isEditMode ? 'Сохранить' : 'Создать'"
             color="primary"
             variant="solid"
             type="submit"

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 definePageMeta({
   ssr: false
 })
@@ -11,6 +11,16 @@ type GrapesEditor = {
   setComponents: (components: string) => void
   setStyle: (style: string) => void
   destroy: () => void
+  BlockManager?: {
+    getAll?: () => { forEach?: (callback: (block: { getId?: () => string, id?: string }) => void) => void }
+    add?: (id: string, options: {
+      label: string
+      category?: string
+      content: string
+      attributes?: Record<string, string>
+    }) => void
+    remove?: (id: string) => void
+  }
 }
 
 interface TemplatePayload {
@@ -27,9 +37,25 @@ interface TemplatePayload {
   }
 }
 
+interface TemplateBlockItem {
+  id: number
+  name: string
+  description?: string
+  contractType: string
+  html: string
+  css: string
+}
+
+type ActiveObject = {
+  id: number
+  name: string
+}
+
 const toast = useToast()
 const route = useRoute()
 const router = useRouter()
+const activeObject = useState<ActiveObject | null>('active-object', () => null)
+const activeObjectIdCookie = useCookie<number | null>('active-object-id', { default: () => null })
 
 useHead({
   link: [
@@ -53,6 +79,33 @@ const docPreviewBg = ref(
 const loading = ref(false)
 const saving = ref(false)
 
+const objectId = computed(() => activeObject.value?.id ?? activeObjectIdCookie.value ?? null)
+const hasObjectScope = computed(() => Boolean(objectId.value))
+
+const {
+  data: templateLibrary,
+  refresh: refreshTemplateLibrary,
+  status: templateLibraryStatus
+} = await useAsyncData<TemplateBlockItem[]>(
+  'document-template-library',
+  () => {
+    if (!objectId.value) {
+      return Promise.resolve([])
+    }
+
+    return $fetch('/api/documents/templates', {
+      query: {
+        objectId: objectId.value
+      }
+    })
+  },
+  {
+    default: () => [],
+    watch: [objectId],
+    immediate: false
+  }
+)
+
 const currentTemplateId = computed(() => {
   const raw = route.query.templateId
   const value = Array.isArray(raw) ? raw[0] : raw
@@ -68,6 +121,36 @@ function getErrorMessage(error: unknown) {
   }
 
   return undefined
+}
+
+const availableTemplateBlocks = computed(() =>
+  (templateLibrary.value || []).filter(template => template.id !== currentTemplateId.value)
+)
+
+function syncTemplateBlocks() {
+  const blockManager = editor.value?.BlockManager
+  if (!blockManager?.getAll || !blockManager.add || !blockManager.remove) {
+    return
+  }
+
+  const existingBlocks = blockManager.getAll()
+  existingBlocks?.forEach?.((block) => {
+    const id = typeof block.getId === 'function' ? block.getId() : block.id
+    if (id?.startsWith('template-block-')) {
+      blockManager.remove?.(id)
+    }
+  })
+
+  availableTemplateBlocks.value.forEach((template) => {
+    blockManager.add?.(`template-block-${template.id}`, {
+      label: `${template.name} (${template.contractType.toUpperCase()})`,
+      category: 'Шаблоны',
+      content: `${template.html}${template.css ? `<style>${template.css}</style>` : ''}`,
+      attributes: {
+        class: 'gjs-block-section'
+      }
+    })
+  })
 }
 
 async function initEditor() {
@@ -112,6 +195,8 @@ async function initEditor() {
       color: #111827;
     }
   `)
+
+  syncTemplateBlocks()
 }
 
 function applyTemplateToEditor(template: TemplatePayload) {
@@ -133,14 +218,18 @@ function applyTemplateToEditor(template: TemplatePayload) {
 }
 
 async function loadTemplate() {
-  if (!currentTemplateId.value || !editor.value) {
+  if (!currentTemplateId.value || !editor.value || !objectId.value) {
     return
   }
 
   loading.value = true
 
   try {
-    const template = await $fetch<TemplatePayload>(`/api/documents/templates/${currentTemplateId.value}`)
+    const template = await $fetch<TemplatePayload>(`/api/documents/templates/${currentTemplateId.value}`, {
+      query: {
+        objectId: objectId.value
+      }
+    })
     applyTemplateToEditor(template)
 
     toast.add({
@@ -160,7 +249,7 @@ async function loadTemplate() {
 }
 
 async function saveTemplate() {
-  if (!editor.value || saving.value) {
+  if (!editor.value || saving.value || !objectId.value) {
     return
   }
 
@@ -177,6 +266,7 @@ async function saveTemplate() {
 
   try {
     const payload = {
+      objectId: objectId.value,
       name: normalizedName,
       description: templateDescription.value.trim(),
       contractType: contractType.value,
@@ -204,6 +294,9 @@ async function saveTemplate() {
       })
     }
 
+    await refreshTemplateLibrary()
+    syncTemplateBlocks()
+
     toast.add({
       title: 'Шаблон сохранен в Supabase',
       color: 'success'
@@ -221,7 +314,31 @@ async function saveTemplate() {
 
 onMounted(async () => {
   await initEditor()
+
+  if (currentTemplateId.value && objectId.value) {
+    await loadTemplate()
+  }
 })
+
+watch(objectId, async (value) => {
+  if (!value) {
+    return
+  }
+
+  await refreshTemplateLibrary()
+}, { immediate: true })
+
+watch(availableTemplateBlocks, () => {
+  syncTemplateBlocks()
+})
+
+watch([objectId, currentTemplateId], async ([nextObjectId]) => {
+  if (!nextObjectId || !currentTemplateId.value || !editor.value) {
+    return
+  }
+
+  await loadTemplate()
+}, { immediate: true })
 
 onBeforeUnmount(() => {
   editor.value?.destroy()
@@ -239,6 +356,12 @@ onBeforeUnmount(() => {
 
         <template #right>
           <div class="flex items-center gap-2">
+            <UBadge
+              v-if="activeObject"
+              :label="activeObject.name"
+              color="neutral"
+              variant="subtle"
+            />
             <UButton
               label="К списку"
               icon="i-lucide-arrow-left"
@@ -252,12 +375,13 @@ onBeforeUnmount(() => {
               color="neutral"
               variant="outline"
               :loading="loading"
-              :disabled="!currentTemplateId"
+              :disabled="!currentTemplateId || !hasObjectScope"
               @click="loadTemplate"
             />
             <UButton
               label="Сохранить"
               icon="i-lucide-save"
+              :disabled="!hasObjectScope"
               :loading="saving"
               @click="saveTemplate"
             />
@@ -267,69 +391,93 @@ onBeforeUnmount(() => {
     </template>
 
     <template #body>
-      <div class="grid gap-4 xl:grid-cols-[320px_minmax(640px,1fr)_320px] items-start">
-        <!-- Левая колонка: информация о шаблоне -->
-        <div class="space-y-4">
-          <div class="rounded-lg border border-default p-4 space-y-3 bg-elevated/40 backdrop-blur">
-            <div class="flex items-center justify-between">
+      <div class="space-y-4">
+        <UAlert
+          v-if="!hasObjectScope"
+          color="warning"
+          variant="subtle"
+          title="Объект не выбран"
+          description="Выберите объект в верхнем меню. Шаблоны создаются и редактируются только внутри объекта."
+        />
+
+        <div class="grid gap-4 xl:grid-cols-[320px_minmax(640px,1fr)_320px] items-start">
+          <div class="space-y-4">
+            <div class="rounded-lg border border-default p-4 space-y-3 bg-elevated/40 backdrop-blur">
               <UFormField label="Название шаблона">
-                <UInput v-model="templateName" class="w-full" />
+                <UInput v-model="templateName" class="w-full" :disabled="!hasObjectScope" />
               </UFormField>
-            </div>
 
-            <UFormField label="Тип договора">
-              <USelect
-                v-model="contractType"
-                :items="[
-                  { label: 'ГПХ', value: 'gph' },
-                  { label: 'NDA', value: 'nda' },
-                  { label: 'Оффер', value: 'offer' },
-                  { label: 'Прочее', value: 'other' }
-                ]"
-                class="w-full"
-              />
-            </UFormField>
+              <UFormField label="Тип договора">
+                <USelect
+                  v-model="contractType"
+                  :items="[
+                    { label: 'ГПХ', value: 'gph' },
+                    { label: 'NDA', value: 'nda' },
+                    { label: 'Оффер', value: 'offer' },
+                    { label: 'Прочее', value: 'other' }
+                  ]"
+                  value-key="value"
+                  class="w-full"
+                  :disabled="!hasObjectScope"
+                />
+              </UFormField>
 
-            <UFormField label="Описание">
-              <UTextarea v-model="templateDescription" class="w-full" :rows="4" />
-            </UFormField>
+              <UFormField label="Описание">
+                <UTextarea
+                  v-model="templateDescription"
+                  class="w-full"
+                  :rows="4"
+                  :disabled="!hasObjectScope"
+                />
+              </UFormField>
 
-            <div class="rounded-md border border-dashed border-default px-3 py-2 text-xs text-muted">
-              Шаблон сохраняется в таблицу `document_templates`, а проект GrapesJS — в Supabase Storage.
-            </div>
-          </div>
-        </div>
-
-        <!-- Центр: полотно документа в A4 -->
-        <div class="rounded-xl border border-default bg-elevated/20 p-4">
-          <div class="doc-shell">
-            <div
-              class="doc-sheet"
-              :style="{ backgroundImage: docPreviewBg }"
-            >
-              <div ref="editorRoot" class="h-full w-full" />
+              <div class="rounded-md border border-dashed border-default px-3 py-2 text-xs text-muted">
+                Шаблон сохраняется в таблицу `document_templates` и привязывается к текущему объекту.
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Правая колонка: редакторы блоков / слои / стили -->
-        <div class="space-y-3">
-          <div class="rounded-lg border border-default bg-elevated/30 p-3">
-            <div class="flex items-center justify-between pb-2">
-              <p class="text-sm font-semibold text-highlighted">Блоки</p>
-              <UBadge label="GrapesJS" color="neutral" variant="subtle" />
+          <div class="rounded-xl border border-default bg-elevated/20 p-4">
+            <div class="doc-shell">
+              <div
+                class="doc-sheet"
+                :style="{ backgroundImage: docPreviewBg }"
+              >
+                <div ref="editorRoot" class="h-full w-full" />
+              </div>
             </div>
-            <div id="gjs-blocks" class="max-h-[360px] overflow-auto pr-1" />
           </div>
 
-          <div class="rounded-lg border border-default bg-elevated/30 p-3">
-            <p class="text-sm font-semibold text-highlighted pb-2">Слои</p>
-            <div id="gjs-layers" class="max-h-[240px] overflow-auto pr-1" />
-          </div>
+          <div class="space-y-3">
+            <div class="rounded-lg border border-default bg-elevated/30 p-3">
+              <div class="flex items-center justify-between pb-2">
+                <p class="text-sm font-semibold text-highlighted">
+                  Блоки
+                </p>
+                <UBadge :label="String(availableTemplateBlocks.length)" color="neutral" variant="subtle" />
+              </div>
+              <div id="gjs-blocks" class="max-h-[360px] overflow-auto pr-1" />
+              <p v-if="templateLibraryStatus === 'pending'" class="pt-2 text-xs text-muted">
+                Загрузка шаблонов...
+              </p>
+              <p v-else-if="!availableTemplateBlocks.length" class="pt-2 text-xs text-muted">
+                Сохраненные шаблоны текущего объекта появятся здесь как блоки.
+              </p>
+            </div>
 
-          <div class="rounded-lg border border-default bg-elevated/30 p-3">
-            <p class="text-sm font-semibold text-highlighted pb-2">Стили</p>
-            <div id="gjs-styles" class="max-h-[320px] overflow-auto pr-1" />
+            <div class="rounded-lg border border-default bg-elevated/30 p-3">
+              <p class="text-sm font-semibold text-highlighted pb-2">
+                Слои
+              </p>
+              <div id="gjs-layers" class="max-h-[240px] overflow-auto pr-1" />
+            </div>
+
+            <div class="rounded-lg border border-default bg-elevated/30 p-3">
+              <p class="text-sm font-semibold text-highlighted pb-2">
+                Стили
+              </p>
+              <div id="gjs-styles" class="max-h-[320px] overflow-auto pr-1" />
+            </div>
           </div>
         </div>
       </div>
@@ -361,4 +509,3 @@ onBeforeUnmount(() => {
   padding: 28px;
 }
 </style>
-

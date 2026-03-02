@@ -1,0 +1,96 @@
+The selector from your screenshot is in [app/components/TeamsMenu.vue](c:/Users/User/Desktop/projects/diamond/app/components/TeamsMenu.vue). Right now it is not connected to the database at all. It is a hardcoded fake list:
+
+- `Tashkent City Mall`
+- `Summit Business Center`
+- `JW Marriott Hotel Tashkent`
+
+So at the moment, your app has this mismatch:
+
+- the top selector shows fake “buildings”
+- the real data model uses only `objects`
+- the global app context is `activeObject`, not `activeBuilding`
+
+Current state in code:
+- [app/components/TeamsMenu.vue](c:/Users/User/Desktop/projects/diamond/app/components/TeamsMenu.vue): static building dropdown
+- [db/supabase/objects.sql](c:/Users/User/Desktop/projects/diamond/db/supabase/objects.sql): only `objects` table exists
+- [app/layouts/default.vue](c:/Users/User/Desktop/projects/diamond/app/layouts/default.vue): app stores only `active-object`
+- many APIs already filter by `objectId`, for example chats and expenses
+
+**Theory**
+What you want is a 2-level model:
+
+1. `buildings`
+2. `objects` that belong to one building
+
+Example:
+- Building: `Tashkent City Mall`
+- Objects inside it: `Post 1`, `Parking`, `Entrance A`, `Floor 2`, etc.
+
+Then behavior becomes:
+
+- when you select a building in the top selector, dashboard is scoped to that building
+- users list shows only users assigned to that building
+- objects page shows only objects from that building
+- when you create a new object while inside that building, `building_id` is filled automatically
+- chats, expenses, documents, and any other scoped data can be filtered by building and optionally by object
+
+**What must change**
+1. Add a real `buildings` table.
+2. Add `building_id` to `objects`.
+3. Replace fake `TeamsMenu` data with `/api/buildings`.
+4. Introduce global `activeBuilding` state alongside `activeObject`.
+5. Filter `/api/objects` by selected building.
+6. On create object, send current `buildingId` automatically.
+7. Users/customers should also belong to a building, either:
+   - directly with `building_id`, or
+   - indirectly through assigned object names/ids.
+   
+Best practice: add `building_id` directly to customers too. It makes filtering reliable.
+
+**Recommended architecture**
+- `buildings`
+  - `id`
+  - `name`
+  - `logo`
+  - `description`
+- `objects`
+  - `id`
+  - `building_id`
+  - `name`
+  - `address`
+  - `description`
+  - `code`
+- `customers`
+  - `id`
+  - `building_id`
+  - `object_pinned`
+  - `object_positions`
+
+**Why this is necessary**
+Right now “building” and “object” are mixed together. If you keep that structure, you cannot correctly do:
+- “show only this building’s users”
+- “create object inside current building automatically”
+- “show only this building’s dashboard data”
+
+Because there is no real DB relation for building ownership yet.
+
+**Best implementation order**
+1. Create `buildings` table and API.
+2. Link `objects.building_id`.
+3. Convert `TeamsMenu` to real buildings selector.
+4. Add `activeBuilding`.
+5. Filter objects page by current building.
+6. Auto-attach new object to current building.
+7. Migrate customers to building-aware filtering.
+
+If you want, I can start implementing this in that order.
+
+
+you were writing about this
+make it
+
+1. develop
+2. design is optionally
+3. use only nuxt ui components 
+4. give the whole sql code to re make the tables
+5. we were integrating the telegram api for chats, and give prompt to create telegram bot group reader

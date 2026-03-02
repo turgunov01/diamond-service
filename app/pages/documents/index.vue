@@ -3,6 +3,8 @@ interface Customer {
   id: number
   username: string
   phoneNumber: string
+  objectPinned: string
+  objectPositions: string[]
 }
 
 interface DocumentTemplate {
@@ -47,7 +49,22 @@ interface DocumentsResponse {
   signed: SignedDocument[]
 }
 
+type ActiveBuilding = {
+  id: number
+  name: string
+}
+
+type ActiveObject = {
+  id: number
+  name: string
+}
+
 const toast = useToast()
+const activeBuilding = useState<ActiveBuilding | null>('active-building', () => null)
+const activeObject = useState<ActiveObject | null>('active-object', () => null)
+const activeBuildingIdCookie = useCookie<number | null>('active-building-id', { default: () => null })
+const activeObjectIdCookie = useCookie<number | null>('active-object-id', { default: () => null })
+
 const activeTab = ref<'templates' | 'sent' | 'signed'>('templates')
 const sendModalOpen = ref(false)
 const selectedTemplateId = ref<number | undefined>()
@@ -56,26 +73,89 @@ const sending = ref(false)
 const exporting = ref(false)
 const deletingId = ref<number | null>(null)
 
+const objectId = computed(() => activeObject.value?.id ?? activeObjectIdCookie.value ?? null)
+const buildingId = computed(() => activeBuilding.value?.id ?? activeBuildingIdCookie.value ?? null)
+const objectName = computed(() => activeObject.value?.name?.trim() || '')
+const hasObjectScope = computed(() => Boolean(objectId.value))
+
 const tabs = [
   { label: 'Шаблоны', value: 'templates' },
   { label: 'Отправленные', value: 'sent' },
   { label: 'Подписанные', value: 'signed' }
 ]
 
-const { data: documentsData, error, status, refresh } = await useFetch<DocumentsResponse>('/api/documents', {
-  default: () => ({
-    templates: [],
-    sent: [],
-    signed: []
-  })
+const emptyDocuments = () => ({
+  templates: [],
+  sent: [],
+  signed: []
 })
 
-const { data: customers } = await useFetch<Customer[]>('/api/customers', {
-  default: () => []
-})
+const {
+  data: documentsData,
+  error,
+  status,
+  refresh
+} = await useAsyncData<DocumentsResponse>(
+  'documents-data',
+  () => {
+    if (!objectId.value) {
+      return Promise.resolve(emptyDocuments())
+    }
+
+    return $fetch('/api/documents', {
+      query: {
+        objectId: objectId.value
+      }
+    })
+  },
+  {
+    default: emptyDocuments,
+    watch: [objectId],
+    immediate: false
+  }
+)
+
+const {
+  data: customers,
+  refresh: refreshCustomers
+} = await useAsyncData<Customer[]>(
+  'documents-customers',
+  () => {
+    if (!buildingId.value) {
+      return Promise.resolve([])
+    }
+
+    return $fetch('/api/customers', {
+      query: {
+        buildingId: buildingId.value
+      }
+    })
+  },
+  {
+    default: () => [],
+    watch: [buildingId],
+    immediate: false
+  }
+)
+
+watch(objectId, async (value) => {
+  if (!value) {
+    return
+  }
+
+  await refresh()
+}, { immediate: true })
+
+watch(buildingId, async (value) => {
+  if (!value) {
+    return
+  }
+
+  await refreshCustomers()
+}, { immediate: true })
 
 watch(error, (value) => {
-  if (!value) {
+  if (!value || !objectId.value) {
     return
   }
 
@@ -86,6 +166,12 @@ watch(error, (value) => {
   })
 }, { immediate: true })
 
+watch(objectId, () => {
+  sendModalOpen.value = false
+  selectedTemplateId.value = undefined
+  selectedRecipientIds.value = []
+})
+
 const templateSelectItems = computed(() => {
   return (documentsData.value?.templates || []).map(template => ({
     label: `${template.name} (${template.contractType.toUpperCase()})`,
@@ -93,8 +179,22 @@ const templateSelectItems = computed(() => {
   }))
 })
 
-const customerSelectOptions = computed(() => {
-  return (customers.value || []).map(customer => ({
+const availableCustomers = computed(() => {
+  if (!objectName.value) {
+    return []
+  }
+
+  return (customers.value || []).filter((customer) => {
+    if (customer.objectPinned === objectName.value) {
+      return true
+    }
+
+    return customer.objectPositions.includes(objectName.value)
+  })
+})
+
+const customerSelectItems = computed(() => {
+  return availableCustomers.value.map(customer => ({
     label: `@${customer.username} - ${customer.phoneNumber}`,
     value: customer.id
   }))
@@ -110,24 +210,24 @@ function formatDate(value: string) {
   })
 }
 
-function statusLabel(status: DispatchStatus) {
-  if (status === 'sent') {
+function statusLabel(statusValue: DispatchStatus) {
+  if (statusValue === 'sent') {
     return 'Отправлено'
   }
 
-  if (status === 'partially_signed') {
+  if (statusValue === 'partially_signed') {
     return 'Частично подписано'
   }
 
   return 'Подписано'
 }
 
-function statusColor(status: DispatchStatus) {
-  if (status === 'sent') {
+function statusColor(statusValue: DispatchStatus) {
+  if (statusValue === 'sent') {
     return 'warning'
   }
 
-  if (status === 'partially_signed') {
+  if (statusValue === 'partially_signed') {
     return 'primary'
   }
 
@@ -135,14 +235,22 @@ function statusColor(status: DispatchStatus) {
 }
 
 function openSendModal(templateId?: number) {
+  if (!objectId.value) {
+    toast.add({
+      title: 'Сначала выберите объект',
+      color: 'warning'
+    })
+    return
+  }
+
   selectedTemplateId.value = templateId
   selectedRecipientIds.value = []
   sendModalOpen.value = true
 }
 
-function getErrorMessage(error: unknown) {
-  if (error && typeof error === 'object') {
-    const err = error as { data?: { statusMessage?: string }, message?: string }
+function getErrorMessage(fetchError: unknown) {
+  if (fetchError && typeof fetchError === 'object') {
+    const err = fetchError as { data?: { statusMessage?: string }, message?: string }
     return err.data?.statusMessage || err.message
   }
 
@@ -150,7 +258,7 @@ function getErrorMessage(error: unknown) {
 }
 
 async function sendDocument() {
-  if (sending.value) {
+  if (sending.value || !objectId.value) {
     return
   }
 
@@ -176,6 +284,7 @@ async function sendDocument() {
     await $fetch('/api/documents/send', {
       method: 'POST',
       body: {
+        objectId: objectId.value,
         templateId: selectedTemplateId.value,
         recipientIds: selectedRecipientIds.value
       }
@@ -188,11 +297,11 @@ async function sendDocument() {
     })
 
     sendModalOpen.value = false
-    await refresh()
-  } catch (err: unknown) {
+    await Promise.all([refresh(), refreshCustomers()])
+  } catch (fetchError: unknown) {
     toast.add({
       title: 'Не удалось отправить документ',
-      description: getErrorMessage(err) || 'Повторите попытку.',
+      description: getErrorMessage(fetchError) || 'Повторите попытку.',
       color: 'error'
     })
   } finally {
@@ -201,6 +310,14 @@ async function sendDocument() {
 }
 
 function createTemplate() {
+  if (!objectId.value) {
+    toast.add({
+      title: 'Сначала выберите объект',
+      color: 'warning'
+    })
+    return
+  }
+
   navigateTo('/documents/builder')
 }
 
@@ -209,13 +326,18 @@ function editTemplate(templateId: number) {
 }
 
 async function deleteTemplate(templateId: number) {
-  if (deletingId.value) return
+  if (deletingId.value || !objectId.value) {
+    return
+  }
 
   deletingId.value = templateId
 
   try {
     await $fetch(`/api/documents/${templateId}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      query: {
+        objectId: objectId.value
+      }
     })
 
     toast.add({
@@ -224,10 +346,10 @@ async function deleteTemplate(templateId: number) {
     })
 
     await refresh()
-  } catch (err: unknown) {
+  } catch (fetchError: unknown) {
     toast.add({
       title: 'Не удалось удалить шаблон',
-      description: getErrorMessage(err) || 'Попробуйте позже.',
+      description: getErrorMessage(fetchError) || 'Попробуйте позже.',
       color: 'error'
     })
   } finally {
@@ -236,14 +358,14 @@ async function deleteTemplate(templateId: number) {
 }
 
 async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
-  if (exporting.value) {
+  if (exporting.value || !objectId.value) {
     return
   }
 
   exporting.value = true
 
   try {
-    const response = await fetch(`/api/documents/export?scope=signed&format=${format}`)
+    const response = await fetch(`/api/documents/export?scope=signed&format=${format}&objectId=${objectId.value}`)
     if (!response.ok) {
       throw new Error('Export failed')
     }
@@ -257,10 +379,10 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
     link.click()
     link.remove()
     URL.revokeObjectURL(url)
-  } catch (err: unknown) {
+  } catch (fetchError: unknown) {
     toast.add({
       title: 'Не удалось скачать файл',
-      description: getErrorMessage(err) || 'Проверьте API экспорта.',
+      description: getErrorMessage(fetchError) || 'Проверьте API экспорта.',
       color: 'error'
     })
   } finally {
@@ -276,11 +398,28 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
         <template #leading>
           <UDashboardSidebarCollapse />
         </template>
+
+        <template #right>
+          <UBadge
+            v-if="activeObject"
+            :label="activeObject.name"
+            color="neutral"
+            variant="subtle"
+          />
+        </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
       <div class="space-y-4">
+        <UAlert
+          v-if="!hasObjectScope"
+          color="warning"
+          variant="subtle"
+          title="Объект не выбран"
+          description="Выберите объект в верхнем меню, чтобы работать с шаблонами и отправками."
+        />
+
         <div class="flex flex-wrap items-center justify-between gap-3">
           <UTabs
             v-model="activeTab"
@@ -296,6 +435,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
               label="Создать шаблон"
               icon="i-lucide-file-plus"
               class="flex-1 sm:flex-none"
+              :disabled="!hasObjectScope"
               @click="createTemplate"
             />
             <UButton
@@ -303,6 +443,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
               label="Новая отправка"
               icon="i-lucide-send"
               class="flex-1 sm:flex-none"
+              :disabled="!hasObjectScope"
               @click="openSendModal()"
             />
             <template v-if="activeTab === 'signed'">
@@ -311,6 +452,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                 icon="i-lucide-file-text"
                 color="neutral"
                 variant="outline"
+                :disabled="!hasObjectScope"
                 :loading="exporting"
                 @click="exportSigned('pdf')"
               />
@@ -319,6 +461,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                 icon="i-lucide-file-spreadsheet"
                 color="neutral"
                 variant="outline"
+                :disabled="!hasObjectScope"
                 :loading="exporting"
                 @click="exportSigned('xlsx')"
               />
@@ -327,6 +470,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                 icon="i-lucide-file"
                 color="neutral"
                 variant="outline"
+                :disabled="!hasObjectScope"
                 :loading="exporting"
                 @click="exportSigned('csv')"
               />
@@ -387,7 +531,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
             v-if="!documentsData.templates.length"
             class="rounded-lg border border-dashed border-default p-6 text-center text-sm text-muted md:col-span-2"
           >
-            Шаблонов пока нет. Создайте первый шаблон через GrapesJS редактор.
+            Шаблонов пока нет для выбранного объекта.
           </div>
         </div>
 
@@ -396,13 +540,27 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
             <table class="min-w-full text-sm">
               <thead>
                 <tr class="bg-elevated/50">
-                  <th class="px-3 py-2 text-left">ID</th>
-                  <th class="px-3 py-2 text-left">Заголовок</th>
-                  <th class="px-3 py-2 text-left">Шаблон</th>
-                  <th class="px-3 py-2 text-left">Получатели</th>
-                  <th class="px-3 py-2 text-left">Подписано</th>
-                  <th class="px-3 py-2 text-left">Статус</th>
-                  <th class="px-3 py-2 text-left">Дата</th>
+                  <th class="px-3 py-2 text-left">
+                    ID
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Заголовок
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Шаблон
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Получатели
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Подписано
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Статус
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Дата
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -411,11 +569,21 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                   :key="dispatch.id"
                   class="border-t border-default"
                 >
-                  <td class="px-3 py-2">{{ dispatch.id }}</td>
-                  <td class="px-3 py-2">{{ dispatch.title }}</td>
-                  <td class="px-3 py-2">{{ dispatch.templateName || '-' }}</td>
-                  <td class="px-3 py-2">{{ dispatch.recipientCount }}</td>
-                  <td class="px-3 py-2">{{ dispatch.signedCount }}</td>
+                  <td class="px-3 py-2">
+                    {{ dispatch.id }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ dispatch.title }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ dispatch.templateName || '-' }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ dispatch.recipientCount }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ dispatch.signedCount }}
+                  </td>
                   <td class="px-3 py-2">
                     <UBadge
                       :label="statusLabel(dispatch.status)"
@@ -423,7 +591,9 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                       variant="subtle"
                     />
                   </td>
-                  <td class="px-3 py-2">{{ formatDate(dispatch.sentAt) }}</td>
+                  <td class="px-3 py-2">
+                    {{ formatDate(dispatch.sentAt) }}
+                  </td>
                 </tr>
                 <tr v-if="!documentsData.sent.length">
                   <td class="px-3 py-4 text-muted" colspan="7">
@@ -441,19 +611,27 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
               class="rounded-lg border border-default bg-elevated/50 p-3 space-y-2"
             >
               <div class="flex items-center justify-between gap-2">
-                <p class="font-semibold text-highlighted">#{{ dispatch.id }} · {{ dispatch.title }}</p>
+                <p class="font-semibold text-highlighted">
+                  #{{ dispatch.id }} · {{ dispatch.title }}
+                </p>
                 <UBadge :label="statusLabel(dispatch.status)" :color="statusColor(dispatch.status)" variant="subtle" />
               </div>
-              <p class="text-xs text-muted">Шаблон: {{ dispatch.templateName || '-' }}</p>
+              <p class="text-xs text-muted">
+                Шаблон: {{ dispatch.templateName || '-' }}
+              </p>
               <div class="flex items-center gap-3 text-sm">
                 <span>Получатели: {{ dispatch.recipientCount }}</span>
                 <span class="text-muted">Подписано: {{ dispatch.signedCount }}</span>
               </div>
-              <p class="text-xs text-muted">Отправлено: {{ formatDate(dispatch.sentAt) }}</p>
+              <p class="text-xs text-muted">
+                Отправлено: {{ formatDate(dispatch.sentAt) }}
+              </p>
             </div>
           </div>
 
-          <p v-else class="text-sm text-muted md:hidden">Отправленных документов пока нет.</p>
+          <p v-else class="text-sm text-muted md:hidden">
+            Отправленных документов пока нет.
+          </p>
         </div>
 
         <div v-else class="space-y-3">
@@ -461,12 +639,24 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
             <table class="min-w-full text-sm">
               <thead>
                 <tr class="bg-elevated/50">
-                  <th class="px-3 py-2 text-left">ID</th>
-                  <th class="px-3 py-2 text-left">Сотрудник</th>
-                  <th class="px-3 py-2 text-left">Телефон</th>
-                  <th class="px-3 py-2 text-left">Шаблон</th>
-                  <th class="px-3 py-2 text-left">Подписано через</th>
-                  <th class="px-3 py-2 text-left">Дата подписи</th>
+                  <th class="px-3 py-2 text-left">
+                    ID
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Сотрудник
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Телефон
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Шаблон
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Подписано через
+                  </th>
+                  <th class="px-3 py-2 text-left">
+                    Дата подписи
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -475,12 +665,24 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
                   :key="item.id"
                   class="border-t border-default"
                 >
-                  <td class="px-3 py-2">{{ item.id }}</td>
-                  <td class="px-3 py-2">{{ item.employeeName }}</td>
-                  <td class="px-3 py-2">{{ item.phoneNumber }}</td>
-                  <td class="px-3 py-2">{{ item.templateName || '-' }}</td>
-                  <td class="px-3 py-2">{{ item.signedVia }}</td>
-                  <td class="px-3 py-2">{{ formatDate(item.signedAt) }}</td>
+                  <td class="px-3 py-2">
+                    {{ item.id }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ item.employeeName }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ item.phoneNumber }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ item.templateName || '-' }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ item.signedVia }}
+                  </td>
+                  <td class="px-3 py-2">
+                    {{ formatDate(item.signedAt) }}
+                  </td>
                 </tr>
                 <tr v-if="!documentsData.signed.length">
                   <td class="px-3 py-4 text-muted" colspan="6">
@@ -498,16 +700,26 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
               class="rounded-lg border border-default bg-elevated/50 p-3 space-y-2"
             >
               <div class="flex items-center justify-between gap-2">
-                <p class="font-semibold text-highlighted">#{{ item.id }} · {{ item.employeeName }}</p>
+                <p class="font-semibold text-highlighted">
+                  #{{ item.id }} · {{ item.employeeName }}
+                </p>
                 <span class="text-xs text-muted">{{ formatDate(item.signedAt) }}</span>
               </div>
-              <p class="text-sm text-muted">Телефон: {{ item.phoneNumber }}</p>
-              <p class="text-sm">Шаблон: {{ item.templateName || '-' }}</p>
-              <p class="text-sm text-muted">Подписано через: {{ item.signedVia }}</p>
+              <p class="text-sm text-muted">
+                Телефон: {{ item.phoneNumber }}
+              </p>
+              <p class="text-sm">
+                Шаблон: {{ item.templateName || '-' }}
+              </p>
+              <p class="text-sm text-muted">
+                Подписано через: {{ item.signedVia }}
+              </p>
             </div>
           </div>
 
-          <p v-else class="text-sm text-muted md:hidden">Подписанных документов пока нет.</p>
+          <p v-else class="text-sm text-muted md:hidden">
+            Подписанных документов пока нет.
+          </p>
         </div>
 
         <p v-if="status === 'pending'" class="text-sm text-muted">
@@ -526,6 +738,7 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
               <USelect
                 v-model="selectedTemplateId"
                 :items="templateSelectItems"
+                value-key="value"
                 class="w-full"
                 placeholder="Выберите шаблон"
               />
@@ -534,13 +747,19 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
             <UFormField label="Сотрудники">
               <USelectMenu
                 v-model="selectedRecipientIds"
-                :options="customerSelectOptions"
+                :items="customerSelectItems"
+                value-key="value"
+                label-key="label"
                 multiple
                 searchable
                 class="w-full"
                 placeholder="Выберите сотрудников"
               />
             </UFormField>
+
+            <p v-if="!customerSelectItems.length" class="text-xs text-muted">
+              Для текущего объекта нет сотрудников с привязкой по "Позиции объекта" или "Закрепленному объекту".
+            </p>
 
             <div class="flex items-center justify-end gap-2">
               <UButton

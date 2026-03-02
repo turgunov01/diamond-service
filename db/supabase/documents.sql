@@ -2,6 +2,7 @@
 
 create table if not exists public.document_templates (
   id bigint generated always as identity primary key,
+  object_id bigint references public.objects(id) on delete restrict,
   name text not null,
   description text,
   contract_type text not null default 'gph',
@@ -14,6 +15,7 @@ create table if not exists public.document_templates (
 
 create table if not exists public.document_dispatches (
   id bigint generated always as identity primary key,
+  object_id bigint references public.objects(id) on delete restrict,
   template_id bigint references public.document_templates(id) on delete set null,
   title text not null,
   recipient_ids bigint[] not null default '{}',
@@ -26,6 +28,7 @@ create table if not exists public.document_dispatches (
 
 create table if not exists public.signed_documents (
   id bigint generated always as identity primary key,
+  object_id bigint references public.objects(id) on delete restrict,
   dispatch_id bigint references public.document_dispatches(id) on delete set null,
   template_id bigint references public.document_templates(id) on delete set null,
   employee_name text not null,
@@ -35,8 +38,11 @@ create table if not exists public.signed_documents (
   file_url text
 );
 
+create index if not exists document_templates_object_id_idx on public.document_templates(object_id);
 create index if not exists document_dispatches_template_id_idx on public.document_dispatches(template_id);
+create index if not exists document_dispatches_object_id_idx on public.document_dispatches(object_id);
 create index if not exists signed_documents_template_id_idx on public.signed_documents(template_id);
+create index if not exists signed_documents_object_id_idx on public.signed_documents(object_id);
 create index if not exists signed_documents_phone_number_idx on public.signed_documents(phone_number);
 
 alter table public.document_templates enable row level security;

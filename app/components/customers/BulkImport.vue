@@ -9,6 +9,7 @@ const toast = useToast()
 const importing = ref(false)
 const downloading = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const activeBuilding = useState<{ id: number, name: string } | null>('active-building')
 
 function pickFile() {
   fileInput.value?.click()
@@ -67,8 +68,13 @@ async function onFileSelected(event: Event) {
   importing.value = true
 
   try {
+    if (!activeBuilding.value?.id) {
+      throw new Error('Select a building before import.')
+    }
+
     const formData = new FormData()
     formData.append('file', file)
+    formData.append('buildingId', String(activeBuilding.value.id))
 
     const result = await $fetch<BulkImportResponse>('/api/customers/bulk-import', {
       method: 'POST',
@@ -133,4 +139,3 @@ async function onFileSelected(event: Event) {
     >
   </div>
 </template>
-

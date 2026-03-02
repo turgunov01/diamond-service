@@ -12,6 +12,10 @@ function isWorkShift(value: unknown): value is WorkShift {
   return value === 'day' || value === 'night'
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 function parseCustomerId(event: H3Event) {
   const rawId = getRouterParam(event, 'id')
   const customerId = Number(rawId)
@@ -37,6 +41,69 @@ function parseNonNegativeMoney(value: unknown, fieldName: string) {
   return amount
 }
 
+function parseAge(value: unknown) {
+  const age = typeof value === 'number' ? value : Number(value)
+  if (!Number.isInteger(age) || age < 18) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле age должно быть целым числом не меньше 18.'
+    })
+  }
+
+  return age
+}
+
+function parseOptionalBuildingId(value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  const buildingId = typeof value === 'number' ? value : Number(value)
+
+  if (!Number.isInteger(buildingId) || buildingId <= 0) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле buildingId должно быть положительным целым числом.'
+    })
+  }
+
+  return buildingId
+}
+
+function parseObjectPositions(value: unknown) {
+  if (!Array.isArray(value)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле objectPositions должно быть массивом строк.'
+    })
+  }
+
+  const normalized = value
+    .map(position => (typeof position === 'string' ? position.trim() : ''))
+    .filter(Boolean)
+
+  return normalized
+}
+
+function normalizePhone(value: unknown) {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле phoneNumber обязательно.'
+    })
+  }
+
+  const digits = String(value).trim().replace(/\D/g, '')
+  if (digits.length < 9) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Поле phoneNumber должно быть валидным номером.'
+    })
+  }
+
+  return `+${digits}`
+}
+
 function parseUpdateBody(body: unknown): UpdateCustomerBody {
   if (!body || typeof body !== 'object') {
     throw createError({
@@ -48,6 +115,38 @@ function parseUpdateBody(body: unknown): UpdateCustomerBody {
   const input = body as Record<string, unknown>
   const update: UpdateCustomerBody = {}
 
+  if (input.username !== undefined) {
+    if (!isNonEmptyString(input.username) || input.username.trim().length < 3) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: 'Поле username должно содержать минимум 3 символа.'
+      })
+    }
+    update.username = input.username.trim()
+  }
+
+  if (input.password !== undefined) {
+    if (!isNonEmptyString(input.password) || input.password.trim().length < 6) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: 'Поле password должно содержать минимум 6 символов.'
+      })
+    }
+    update.password = input.password
+  }
+
+  if (input.phoneNumber !== undefined) {
+    update.phoneNumber = normalizePhone(input.phoneNumber)
+  }
+
+  if (input.age !== undefined) {
+    update.age = parseAge(input.age)
+  }
+
+  if (input.buildingId !== undefined) {
+    update.buildingId = parseOptionalBuildingId(input.buildingId)
+  }
+
   if (input.workShift !== undefined) {
     if (!isWorkShift(input.workShift)) {
       throw createError({
@@ -56,6 +155,14 @@ function parseUpdateBody(body: unknown): UpdateCustomerBody {
       })
     }
     update.workShift = input.workShift
+  }
+
+  if (input.objectPinned !== undefined) {
+    update.objectPinned = typeof input.objectPinned === 'string' ? input.objectPinned.trim() : ''
+  }
+
+  if (input.objectPositions !== undefined) {
+    update.objectPositions = parseObjectPositions(input.objectPositions)
   }
 
   if (input.baseSalary !== undefined) {
@@ -81,25 +188,47 @@ export default eventHandler(async (event) => {
   const updateBody = parseUpdateBody(await readBody(event))
   const { url, serviceRoleKey } = getSupabaseServerConfig()
 
-  const rows = await $fetch<CustomerDbRow[]>(`${url}/rest/v1/customers`, {
-    method: 'PATCH',
-    headers: {
-      ...getSupabaseServerHeaders(serviceRoleKey),
-      Prefer: 'return=representation'
-    },
-    query: {
-      id: `eq.${customerId}`
-    },
-    body: mapUpdateBodyToDbUpdate(updateBody)
-  })
-
-  const updatedRow = rows[0]
-  if (!updatedRow) {
-    throw createError({
-      statusCode: 404,
-      statusMessage: 'Пользователь не найден.'
+  try {
+    const rows = await $fetch<CustomerDbRow[]>(`${url}/rest/v1/customers`, {
+      method: 'PATCH',
+      headers: {
+        ...getSupabaseServerHeaders(serviceRoleKey),
+        Prefer: 'return=representation'
+      },
+      query: {
+        id: `eq.${customerId}`
+      },
+      body: mapUpdateBodyToDbUpdate(updateBody)
     })
-  }
 
-  return mapCustomerDbRowToRecord(updatedRow)
+    const updatedRow = rows[0]
+    if (!updatedRow) {
+      throw createError({
+        statusCode: 404,
+        statusMessage: 'Пользователь не найден.'
+      })
+    }
+
+    return mapCustomerDbRowToRecord(updatedRow)
+  } catch (error: unknown) {
+    const data = error && typeof error === 'object' && 'data' in error
+      ? error.data as { code?: string, message?: string } | undefined
+      : undefined
+
+    if (data?.code === '23505') {
+      throw createError({
+        statusCode: 409,
+        statusMessage: 'Пользователь с таким username или phoneNumber уже существует.'
+      })
+    }
+
+    if (data?.message) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: data.message
+      })
+    }
+
+    throw error
+  }
 })

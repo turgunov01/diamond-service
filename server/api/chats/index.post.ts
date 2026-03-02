@@ -19,15 +19,23 @@ export default eventHandler(async (event) => {
   const { url, serviceRoleKey } = getSupabaseServerConfig()
   const headers = getSupabaseServerHeaders(serviceRoleKey)
 
-  const chat = await $fetch<{ id: number }>(`${url}/rest/v1/chats`, {
+  const insertedChats = await $fetch<Array<{ id: number }>>(`${url}/rest/v1/chats`, {
     method: 'POST',
-    headers,
+    headers: {
+      ...headers,
+      Prefer: 'return=representation'
+    },
     body: {
       title: body.title,
       is_group: body.isGroup ?? true,
       object_id: body.objectId
     }
   })
+
+  const chat = insertedChats[0]
+  if (!chat?.id) {
+    throw createError({ statusCode: 500, statusMessage: 'Supabase did not return created chat id' })
+  }
 
   if (body.memberIds?.length) {
     await $fetch(`${url}/rest/v1/chat_members`, {

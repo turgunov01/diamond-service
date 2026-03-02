@@ -7,9 +7,12 @@ type ChatRow = {
   updated_at: string
   tg_chat_id?: number | null
   tg_type?: string | null
-  last_message?: string | null
-  last_time?: string | null
-  unread?: number | null
+}
+
+type ChatMessageRow = {
+  chat_id: number
+  content: string
+  created_at: string
 }
 
 type ChatItem = {
@@ -24,6 +27,10 @@ type ChatItem = {
   unread?: number
 }
 
+function encodePostgrestIn(values: number[]) {
+  return `(${values.join(',')})`
+}
+
 export default eventHandler(async (event): Promise<ChatItem[]> => {
   const { url, serviceRoleKey } = getSupabaseServerConfig()
 
@@ -33,35 +40,51 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
     throw createError({ statusCode: 400, statusMessage: 'objectId query param is required' })
   }
 
-  // For demo: last_message/last_time are fetched from latest chat_messages
+  const headers = getSupabaseServerHeaders(serviceRoleKey)
   const rows = await $fetch<ChatRow[]>(`${url}/rest/v1/chats`, {
-    headers: getSupabaseServerHeaders(serviceRoleKey),
+    headers,
     query: {
-      select: `
-        id,
-        title,
-        is_group,
-        tg_chat_id,
-        tg_type,
-        updated_at,
-        chat_messages!left(content, created_at),
-        chat_messages(count)
-      `,
+      select: 'id,title,is_group,tg_chat_id,tg_type,updated_at',
       object_id: `eq.${objectId}`,
       order: 'updated_at.desc',
       limit: 50
     }
   })
 
-  return rows.map(row => ({
-    id: row.id,
-    title: row.title,
-    isGroup: row.is_group,
-    updatedAt: row.updated_at,
-    tgChatId: row.tg_chat_id || undefined,
-    tgType: row.tg_type || undefined,
-    lastMessage: (row as any).chat_messages?.[0]?.content || undefined,
-    lastTime: (row as any).chat_messages?.[0]?.created_at || undefined,
-    unread: undefined
-  }))
+  if (!rows.length) {
+    return []
+  }
+
+  const messageRows = await $fetch<ChatMessageRow[]>(`${url}/rest/v1/chat_messages`, {
+    headers,
+    query: {
+      select: 'chat_id,content,created_at',
+      object_id: `eq.${objectId}`,
+      chat_id: `in.${encodePostgrestIn(rows.map(row => row.id))}`,
+      order: 'created_at.desc'
+    }
+  }).catch(() => [] as ChatMessageRow[])
+
+  const latestMessageByChatId = new Map<number, ChatMessageRow>()
+  for (const row of messageRows) {
+    if (!latestMessageByChatId.has(row.chat_id)) {
+      latestMessageByChatId.set(row.chat_id, row)
+    }
+  }
+
+  return rows.map((row) => {
+    const latestMessage = latestMessageByChatId.get(row.id)
+
+    return {
+      id: row.id,
+      title: row.title,
+      isGroup: row.is_group,
+      updatedAt: row.updated_at,
+      tgChatId: row.tg_chat_id || undefined,
+      tgType: row.tg_type || undefined,
+      lastMessage: latestMessage?.content || undefined,
+      lastTime: latestMessage?.created_at || undefined,
+      unread: undefined
+    }
+  })
 })

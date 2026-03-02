@@ -7,6 +7,7 @@ export interface SupabaseErrorData {
 
 export interface DocumentTemplateDbRow {
   id: number
+  object_id: number | null
   name: string
   description: string | null
   contract_type: string
@@ -19,6 +20,7 @@ export interface DocumentTemplateDbRow {
 
 export interface DocumentDispatchDbRow {
   id: number
+  object_id: number | null
   template_id: number | null
   title: string
   recipient_ids: number[]
@@ -31,6 +33,7 @@ export interface DocumentDispatchDbRow {
 
 export interface SignedDocumentDbRow {
   id: number
+  object_id: number | null
   dispatch_id: number | null
   template_id: number | null
   employee_name: string
@@ -42,6 +45,7 @@ export interface SignedDocumentDbRow {
 
 export interface DocumentTemplateRecord {
   id: number
+  objectId?: number
   name: string
   description?: string
   contractType: string
@@ -54,6 +58,7 @@ export interface DocumentTemplateRecord {
 
 export interface DocumentDispatchRecord {
   id: number
+  objectId?: number
   templateId: number | null
   templateName?: string
   title: string
@@ -67,6 +72,7 @@ export interface DocumentDispatchRecord {
 
 export interface SignedDocumentRecord {
   id: number
+  objectId?: number
   dispatchId: number | null
   templateId: number | null
   templateName?: string
@@ -80,6 +86,7 @@ export interface SignedDocumentRecord {
 export function mapTemplateDbRowToRecord(row: DocumentTemplateDbRow): DocumentTemplateRecord {
   return {
     id: row.id,
+    objectId: row.object_id || undefined,
     name: row.name,
     description: row.description || undefined,
     contractType: row.contract_type,
@@ -94,6 +101,7 @@ export function mapTemplateDbRowToRecord(row: DocumentTemplateDbRow): DocumentTe
 export function mapDispatchDbRowToRecord(row: DocumentDispatchDbRow): DocumentDispatchRecord {
   return {
     id: row.id,
+    objectId: row.object_id || undefined,
     templateId: row.template_id,
     title: row.title,
     recipientIds: row.recipient_ids || [],
@@ -108,6 +116,7 @@ export function mapDispatchDbRowToRecord(row: DocumentDispatchDbRow): DocumentDi
 export function mapSignedDbRowToRecord(row: SignedDocumentDbRow): SignedDocumentRecord {
   return {
     id: row.id,
+    objectId: row.object_id || undefined,
     dispatchId: row.dispatch_id,
     templateId: row.template_id,
     employeeName: row.employee_name,
@@ -127,6 +136,21 @@ export function sanitizePathSegment(value: string) {
 
 export function encodeStoragePath(path: string) {
   return path.split('/').map(part => encodeURIComponent(part)).join('/')
+}
+
+export function parseObjectIdInput(value: unknown, message = 'objectId is required.') {
+  const objectId = typeof value === 'string' || typeof value === 'number'
+    ? Number(value)
+    : NaN
+
+  if (!Number.isInteger(objectId) || objectId <= 0) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: message
+    })
+  }
+
+  return objectId
 }
 
 function getErrorStatusCode(error: unknown) {
@@ -160,8 +184,8 @@ export async function ensureStorageBucket(options: {
     await $fetch(`${options.url}/storage/v1/bucket`, {
       method: 'POST',
       headers: {
-        apikey: options.serviceRoleKey,
-        Authorization: `Bearer ${options.serviceRoleKey}`,
+        'apikey': options.serviceRoleKey,
+        'Authorization': `Bearer ${options.serviceRoleKey}`,
         'Content-Type': 'application/json'
       },
       body: {
@@ -201,8 +225,8 @@ export async function uploadStorageObject(options: {
     await $fetch(`${options.url}/storage/v1/object/${options.bucket}/${encodeStoragePath(options.path)}`, {
       method: 'POST',
       headers: {
-        apikey: options.serviceRoleKey,
-        Authorization: `Bearer ${options.serviceRoleKey}`,
+        'apikey': options.serviceRoleKey,
+        'Authorization': `Bearer ${options.serviceRoleKey}`,
         'Content-Type': options.contentType,
         'x-upsert': 'true'
       },
@@ -239,4 +263,3 @@ export async function downloadStorageObject(options: {
     })
   }
 }
-

@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs'
+import { Readable } from 'node:stream'
 import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
 import {
   mapCreateBodyToDbInsert,
@@ -20,6 +21,7 @@ interface MultipartPart {
 }
 
 interface SourceRow {
+  buildingId?: number | string
   username?: string
   password?: string
   phoneNumber?: string
@@ -40,19 +42,18 @@ interface ExistingCustomerLiteRow {
 }
 
 function normalizePhone(raw: unknown) {
-  if (typeof raw !== 'string') {
+  if (typeof raw !== 'string' && typeof raw !== 'number') {
     return ''
   }
 
-  const trimmed = raw.trim()
-  const hasPlus = trimmed.startsWith('+')
+  const trimmed = String(raw).trim()
   const digits = trimmed.replace(/\D/g, '')
 
   if (digits.length < 9) {
     return ''
   }
 
-  return hasPlus ? `+${digits}` : digits
+  return `+${digits}`
 }
 
 function parseWorkShift(value: unknown): WorkShift | null {
@@ -111,6 +112,20 @@ function parseNonNegativeInt(value: unknown, fallback: number) {
   return parsed
 }
 
+function parseOptionalBuildingId(value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value)
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null
+  }
+
+  return parsed
+}
+
 function toStringOrNumber(value: unknown): string | number | undefined {
   if (typeof value === 'string' || typeof value === 'number') {
     return value
@@ -122,10 +137,15 @@ function toStringOrNumber(value: unknown): string | number | undefined {
 function toRowObject(raw: Record<string, unknown>): SourceRow {
   return {
     username: typeof raw.username === 'string' ? raw.username : undefined,
+    buildingId: toStringOrNumber(raw.buildingId ?? raw.building_id),
     password: typeof raw.password === 'string' ? raw.password : undefined,
     phoneNumber: typeof raw.phoneNumber === 'string'
       ? raw.phoneNumber
-      : (typeof raw.phone_number === 'string' ? raw.phone_number : undefined),
+      : (typeof raw.phoneNumber === 'number'
+          ? String(raw.phoneNumber)
+          : (typeof raw.phone_number === 'string'
+              ? raw.phone_number
+              : (typeof raw.phone_number === 'number' ? String(raw.phone_number) : undefined))),
     age: toStringOrNumber(raw.age),
     workShift: typeof raw.workShift === 'string'
       ? raw.workShift
@@ -192,9 +212,12 @@ function worksheetToJson(worksheet: ExcelJS.Worksheet) {
   }
 
   const headerRow = worksheet.getRow(1)
-  const headers = headerRow.values
-    .slice(1)
-    .map((cell, index) => {
+  const headerValues = Array.isArray(headerRow.values)
+    ? headerRow.values.slice(1)
+    : []
+
+  const headers = headerValues
+    .map((cell: ExcelJS.CellValue, index: number) => {
       const header = String(normalizeCellValue(cell)).trim()
       return header.length ? header : `column_${index + 1}`
     })
@@ -214,7 +237,7 @@ function worksheetToJson(worksheet: ExcelJS.Worksheet) {
     const record: Record<string, unknown> = {}
     let hasData = false
 
-    headers.forEach((header, cellIndex) => {
+    headers.forEach((header: string, cellIndex: number) => {
       const cellValue = normalizeCellValue(row.getCell(cellIndex + 1).value)
       record[header] = cellValue === undefined ? '' : cellValue
       if (cellValue !== '' && cellValue !== null && cellValue !== undefined) {
@@ -246,9 +269,10 @@ async function parseSpreadsheet(bytes: Uint8Array, fileName: string) {
   try {
     if (extension === 'csv') {
       const text = new TextDecoder().decode(bytes)
-      worksheet = await workbook.csv.read(text)
+      worksheet = await workbook.csv.read(Readable.from([text]))
     } else {
-      await workbook.xlsx.load(Buffer.from(bytes))
+      const workbookBuffer = Buffer.from(Uint8Array.from(bytes))
+      await (workbook.xlsx.load as (buffer: unknown) => Promise<ExcelJS.Workbook>)(workbookBuffer)
       worksheet = workbook.worksheets[0]
     }
   } catch {
@@ -271,10 +295,15 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'multipart/form-data is empty.' })
   }
 
-  const filePart = form.find((part) => part.name === 'file' && part.filename) as MultipartPart | undefined
+  const filePart = form.find(part => part.name === 'file' && part.filename) as MultipartPart | undefined
+  const buildingField = form.find(part => part.name === 'buildingId' && !part.filename)
   if (!filePart || !filePart.filename) {
     throw createError({ statusCode: 400, statusMessage: 'File is required in field "file".' })
   }
+
+  const selectedBuildingId = buildingField
+    ? parseOptionalBuildingId(new TextDecoder().decode(buildingField.data))
+    : null
 
   const rawRows = await parseSpreadsheet(filePart.data, filePart.filename)
 
@@ -352,10 +381,6 @@ export default eventHandler(async (event) => {
     }
 
     const objectPinned = typeof row.objectPinned === 'string' ? row.objectPinned.trim() : ''
-    if (!objectPinned) {
-      errors.push({ row: rowNumber, message: 'objectPinned is required.' })
-      return
-    }
 
     const objectPositions = parseObjectPositions(row.objectPositions)
     if (!objectPositions.length) {
@@ -384,6 +409,7 @@ export default eventHandler(async (event) => {
       : `bulk-import/${username}.pdf`
 
     const body: CreateCustomerBody = {
+      buildingId: parseOptionalBuildingId(row.buildingId) ?? selectedBuildingId,
       username,
       avatar: { src: avatarSrc },
       password,

@@ -1,3 +1,5 @@
+import type { H3Event } from 'h3'
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
 const DEFAULT_OBJECT_ID = Number(process.env.TELEGRAM_DEFAULT_OBJECT_ID || NaN)

@@ -1,13 +1,14 @@
-﻿import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
+import type { H3Event } from 'h3'
+import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
 import {
   downloadStorageObject,
   ensureStorageBucket,
   getSupabaseErrorData,
   mapTemplateDbRowToRecord,
+  parseObjectIdInput,
   uploadStorageObject,
   type DocumentTemplateDbRow
 } from '../documents'
-import type { H3Event } from 'h3'
 
 function parseTemplateId(event: H3Event) {
   const rawId = getRouterParam(event, 'id')
@@ -21,6 +22,7 @@ function parseTemplateId(event: H3Event) {
 
 export default eventHandler(async (event) => {
   const templateId = parseTemplateId(event)
+  const objectId = parseObjectIdInput(getQuery(event).objectId, 'objectId query param is required.')
   const { url, serviceRoleKey, documentTemplateBucket } = getSupabaseServerConfig()
 
   let rows: DocumentTemplateDbRow[]
@@ -28,8 +30,9 @@ export default eventHandler(async (event) => {
     rows = await $fetch<DocumentTemplateDbRow[]>(`${url}/rest/v1/document_templates`, {
       headers: getSupabaseServerHeaders(serviceRoleKey),
       query: {
-        select: 'id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
+        select: 'id,object_id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
         id: `eq.${templateId}`,
+        object_id: `eq.${objectId}`,
         limit: 1
       }
     })
@@ -51,7 +54,6 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Template not found.' })
   }
 
-  // Подгружаем проект из Storage, если его нет — восстанавливаем из HTML/CSS.
   let projectRaw: string | null = null
   try {
     projectRaw = await downloadStorageObject({
@@ -76,6 +78,7 @@ export default eventHandler(async (event) => {
     })
 
     const fallbackProject = JSON.stringify({
+      objectId: row.object_id,
       name: row.name,
       description: row.description,
       contractType: row.contract_type,
@@ -110,4 +113,3 @@ export default eventHandler(async (event) => {
     projectData: parsedProject
   }
 })
-

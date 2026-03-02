@@ -1,5 +1,17 @@
 <script setup lang="ts">
-import type { NavigationMenuItem } from '@nuxt/ui'
+import type { CommandPaletteGroup, CommandPaletteItem, NavigationMenuItem } from '@nuxt/ui'
+
+type BuildingItem = {
+  id: number
+  name: string
+  logo?: string | null
+  description?: string | null
+}
+
+type ObjectItem = {
+  id: number
+  name: string
+}
 
 const route = useRoute()
 const toast = useToast()
@@ -10,47 +22,91 @@ const { data: links } = await useFetch<NavigationMenuItem[][]>('/api/routes/side
   default: () => [[], []] as NavigationMenuItem[][]
 })
 
-const groups = computed<any[]>(() => [
+const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => [
   {
     id: 'links',
-    label: 'Перейти',
-    items: (links.value ?? []).flat()
+    label: 'РџРµСЂРµР№С‚Рё',
+    items: ((links.value ?? []).flat() as CommandPaletteItem[])
   },
   {
     id: 'code',
-    label: 'Код',
+    label: 'РљРѕРґ',
     items: [
       {
         id: 'source',
-        label: 'Открыть исходник страницы',
+        label: 'РћС‚РєСЂС‹С‚СЊ РёСЃС…РѕРґРЅРёРє СЃС‚СЂР°РЅРёС†С‹',
         icon: 'i-simple-icons-github',
         to: `https://github.com/nuxt-ui-templates/dashboard/blob/main/app/pages${route.path === '/' ? '/index' : route.path}.vue`,
         target: '_blank'
       }
-    ]
+    ] as CommandPaletteItem[]
   }
 ])
 
-const activeObject = useState<{ id: number, name: string } | null>('active-object', () => null)
+const activeBuilding = useState<BuildingItem | null>('active-building', () => null)
+const activeObject = useState<ObjectItem | null>('active-object', () => null)
+const activeBuildingIdCookie = useCookie<number | null>('active-building-id', { default: () => null })
+const activeObjectIdCookie = useCookie<number | null>('active-object-id', { default: () => null })
 
-const { data: objects } = await useFetch<{ id: number, name: string }[]>('/api/objects', {
+const { data: buildings } = await useFetch<BuildingItem[]>('/api/buildings', {
   default: () => []
 })
 
+const { data: objects } = await useFetch<ObjectItem[]>('/api/objects', {
+  default: () => [],
+  query: {
+    buildingId: computed(() => activeBuilding.value?.id)
+  }
+})
+
+watch(buildings, (list) => {
+  if (!list?.length) {
+    activeBuilding.value = null
+    activeObject.value = null
+    return
+  }
+
+  const preferredId = activeBuilding.value?.id || activeBuildingIdCookie.value
+  const nextBuilding = list.find(item => item.id === preferredId) || list[0] || null
+
+  if (!nextBuilding) {
+    activeBuilding.value = null
+    return
+  }
+
+  if (activeBuilding.value?.id !== nextBuilding.id) {
+    activeBuilding.value = nextBuilding
+  }
+}, { immediate: true })
+
+watch(activeBuilding, (value) => {
+  activeBuildingIdCookie.value = value?.id ?? null
+})
+
 watch(objects, (list) => {
-  if (activeObject.value || !list?.length) {
+  if (!list?.length) {
+    activeObject.value = null
     return
   }
 
-  const [firstObject] = list
-  if (!firstObject) {
+  const preferredId = activeObject.value?.id || activeObjectIdCookie.value
+  const nextObject = list.find(item => item.id === preferredId) || list[0] || null
+
+  if (!nextObject) {
+    activeObject.value = null
     return
   }
 
-  activeObject.value = {
-    id: firstObject.id,
-    name: firstObject.name
+  if (activeObject.value?.id !== nextObject.id) {
+    activeObject.value = {
+      id: nextObject.id,
+      name: nextObject.name
+    }
   }
+}, { immediate: true })
+
+watch(activeObject, (value) => {
+  activeObjectIdCookie.value = value?.id ?? null
 })
 
 onMounted(() => {
@@ -60,12 +116,12 @@ onMounted(() => {
   }
 
   toast.add({
-    title: 'Мы используем файлы cookie для улучшения вашего опыта на сайте.',
+    title: 'РњС‹ РёСЃРїРѕР»СЊР·СѓРµРј С„Р°Р№Р»С‹ cookie РґР»СЏ СѓР»СѓС‡С€РµРЅРёСЏ РІР°С€РµРіРѕ РѕРїС‹С‚Р° РЅР° СЃР°Р№С‚Рµ.',
     duration: 0,
     close: false,
     actions: [
       {
-        label: 'Принять',
+        label: 'РџСЂРёРЅСЏС‚СЊ',
         color: 'neutral',
         variant: 'outline',
         onClick: () => {
@@ -73,7 +129,7 @@ onMounted(() => {
         }
       },
       {
-        label: 'Отклонить',
+        label: 'РћС‚РєР»РѕРЅРёС‚СЊ',
         color: 'neutral',
         variant: 'ghost'
       }

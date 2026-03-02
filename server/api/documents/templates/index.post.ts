@@ -1,8 +1,9 @@
-﻿import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
+import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
 import {
   ensureStorageBucket,
   getSupabaseErrorData,
   mapTemplateDbRowToRecord,
+  parseObjectIdInput,
   sanitizePathSegment,
   uploadStorageObject,
   type DocumentTemplateDbRow
@@ -10,6 +11,7 @@ import {
 
 interface CreateTemplateBody {
   name: string
+  objectId: number
   description?: string
   contractType?: string
   html?: string
@@ -17,7 +19,7 @@ interface CreateTemplateBody {
   projectData?: unknown
 }
 
-function parseCreateTemplateBody(body: unknown): Required<Pick<CreateTemplateBody, 'name'>> & Omit<CreateTemplateBody, 'name'> {
+function parseCreateTemplateBody(body: unknown): Required<Pick<CreateTemplateBody, 'name' | 'objectId'>> & Omit<CreateTemplateBody, 'name' | 'objectId'> {
   if (!body || typeof body !== 'object') {
     throw createError({
       statusCode: 400,
@@ -37,6 +39,7 @@ function parseCreateTemplateBody(body: unknown): Required<Pick<CreateTemplateBod
 
   return {
     name,
+    objectId: parseObjectIdInput(input.objectId),
     description: typeof input.description === 'string' ? input.description.trim() : undefined,
     contractType: typeof input.contractType === 'string' && input.contractType.trim().length
       ? input.contractType.trim()
@@ -65,6 +68,7 @@ export default eventHandler(async (event) => {
   const storagePath = `${safeName}/${timestamp}-${uniqueId}.json`
 
   const serializedProject = JSON.stringify({
+    objectId: payload.objectId,
     name: payload.name,
     description: payload.description,
     contractType: payload.contractType,
@@ -92,6 +96,7 @@ export default eventHandler(async (event) => {
         Prefer: 'return=representation'
       },
       body: {
+        object_id: payload.objectId,
         name: payload.name,
         description: payload.description || null,
         contract_type: payload.contractType,
@@ -134,4 +139,3 @@ export default eventHandler(async (event) => {
     throw error
   }
 })
-

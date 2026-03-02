@@ -45,7 +45,7 @@ const templateRows = [
     phoneNumber: '+998901112233',
     age: 28,
     workShift: 'day',
-    objectPinned: 'Корпус A',
+    objectPinned: '',
     objectPositions: 'Пост 1,Пост 2',
     baseSalary: 1000000,
     positionBonus: 100000,

@@ -5,6 +5,7 @@ import {
   mapDispatchDbRowToRecord,
   mapSignedDbRowToRecord,
   mapTemplateDbRowToRecord,
+  parseObjectIdInput,
   type DocumentDispatchDbRow,
   type DocumentTemplateDbRow,
   type SignedDocumentDbRow
@@ -160,6 +161,7 @@ async function toPdfBuffer(title: string, rows: Record<string, unknown>[]) {
 
 export default eventHandler(async (event) => {
   const query = getQuery(event)
+  const objectId = parseObjectIdInput(query.objectId, 'objectId query param is required.')
   const format = parseExportFormat(query.format)
   const scope = parseExportScope(query.scope)
 
@@ -170,21 +172,24 @@ export default eventHandler(async (event) => {
     $fetch<DocumentTemplateDbRow[]>(`${url}/rest/v1/document_templates`, {
       headers,
       query: {
-        select: 'id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
+        select: 'id,object_id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
+        object_id: `eq.${objectId}`,
         order: 'id.desc'
       }
     }),
     $fetch<DocumentDispatchDbRow[]>(`${url}/rest/v1/document_dispatches`, {
       headers,
       query: {
-        select: 'id,template_id,title,recipient_ids,recipient_phones,recipient_count,signed_count,status,sent_at',
+        select: 'id,object_id,template_id,title,recipient_ids,recipient_phones,recipient_count,signed_count,status,sent_at',
+        object_id: `eq.${objectId}`,
         order: 'id.desc'
       }
     }),
     $fetch<SignedDocumentDbRow[]>(`${url}/rest/v1/signed_documents`, {
       headers,
       query: {
-        select: 'id,dispatch_id,template_id,employee_name,phone_number,signed_at,signed_via,file_url',
+        select: 'id,object_id,dispatch_id,template_id,employee_name,phone_number,signed_at,signed_via,file_url',
+        object_id: `eq.${objectId}`,
         order: 'signed_at.desc'
       }
     })

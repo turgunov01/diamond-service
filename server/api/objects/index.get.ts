@@ -2,18 +2,30 @@ import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/s
 
 type ObjectRow = {
   id: number
+  building_id?: number | null
   name: string
   description?: string | null
+  address?: string | null
+  code?: string | null
 }
 
-export default eventHandler(async () => {
+export default eventHandler(async (event) => {
   const { url, serviceRoleKey } = getSupabaseServerConfig()
+  const buildingIdRaw = getQuery(event).buildingId
+  const buildingId = typeof buildingIdRaw === 'string' ? Number(buildingIdRaw) : NaN
+
+  const query: Record<string, string> = {
+    select: 'id,building_id,name,description,address,code',
+    order: 'id.asc'
+  }
+
+  if (Number.isInteger(buildingId) && buildingId > 0) {
+    query.building_id = `eq.${buildingId}`
+  }
+
   const rows = await $fetch<ObjectRow[]>(`${url}/rest/v1/objects`, {
     headers: getSupabaseServerHeaders(serviceRoleKey),
-    query: {
-      select: 'id,name,description',
-      order: 'id.asc'
-    }
+    query
   })
   return rows
 })

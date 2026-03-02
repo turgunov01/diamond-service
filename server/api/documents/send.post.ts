@@ -1,13 +1,15 @@
-﻿import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
+import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
 import {
   getSupabaseErrorData,
   mapDispatchDbRowToRecord,
+  parseObjectIdInput,
   type DocumentDispatchDbRow,
   type DocumentStatus,
   type DocumentTemplateDbRow
 } from './documents'
 
 interface SendDocumentBody {
+  objectId: number
   templateId: number
   recipientIds: number[]
   title?: string
@@ -17,6 +19,15 @@ interface CustomerLiteRow {
   id: number
   username: string
   phone_number: string
+  building_id?: number | null
+  object_pinned?: string | null
+  object_positions?: string[] | null
+}
+
+interface ObjectLiteRow {
+  id: number
+  building_id?: number | null
+  name: string
 }
 
 function parseSendBody(body: unknown): SendDocumentBody {
@@ -44,6 +55,7 @@ function parseSendBody(body: unknown): SendDocumentBody {
   }
 
   return {
+    objectId: parseObjectIdInput(input.objectId),
     templateId,
     recipientIds: Array.from(new Set(recipientIds)),
     title: typeof input.title === 'string' && input.title.trim().length ? input.title.trim() : undefined
@@ -76,8 +88,9 @@ export default eventHandler(async (event) => {
     templateRows = await $fetch<DocumentTemplateDbRow[]>(`${url}/rest/v1/document_templates`, {
       headers,
       query: {
-        select: 'id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
+        select: 'id,object_id,name,description,contract_type,html,css,storage_path,created_at,updated_at',
         id: `eq.${payload.templateId}`,
+        object_id: `eq.${payload.objectId}`,
         limit: 1
       }
     })
@@ -99,21 +112,43 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Template not found.' })
   }
 
+  const objectRows = await $fetch<ObjectLiteRow[]>(`${url}/rest/v1/objects`, {
+    headers,
+    query: {
+      select: 'id,building_id,name',
+      id: `eq.${payload.objectId}`,
+      limit: 1
+    }
+  })
+
+  const currentObject = objectRows[0]
+  if (!currentObject) {
+    throw createError({ statusCode: 404, statusMessage: 'Object not found.' })
+  }
+
   const customers = await $fetch<CustomerLiteRow[]>(`${url}/rest/v1/customers`, {
     headers,
     query: {
-      select: 'id,username,phone_number',
+      select: 'id,username,phone_number,building_id,object_pinned,object_positions',
       id: `in.${encodePostgrestIn(payload.recipientIds)}`,
+      ...(currentObject.building_id ? { building_id: `eq.${currentObject.building_id}` } : {}),
       order: 'id.asc'
     }
   })
 
-  if (!customers.length) {
-    throw createError({ statusCode: 404, statusMessage: 'Recipients were not found.' })
+  const eligibleCustomers = customers.filter((customer) => {
+    const pinned = (customer.object_pinned || '').trim()
+    const positions = customer.object_positions || []
+
+    return pinned === currentObject.name || positions.includes(currentObject.name)
+  })
+
+  if (!eligibleCustomers.length) {
+    throw createError({ statusCode: 404, statusMessage: 'Recipients were not found for this object.' })
   }
 
-  const recipientIds = customers.map(customer => customer.id)
-  const recipientPhones = customers.map(customer => customer.phone_number)
+  const recipientIds = eligibleCustomers.map(customer => customer.id)
+  const recipientPhones = eligibleCustomers.map(customer => customer.phone_number)
   const dispatchTitle = payload.title || `${template.name} - ${new Date().toLocaleDateString('ru-RU')}`
 
   const insertedDispatchRows = await $fetch<DocumentDispatchDbRow[]>(`${url}/rest/v1/document_dispatches`, {
@@ -123,6 +158,7 @@ export default eventHandler(async (event) => {
       Prefer: 'return=representation'
     },
     body: {
+      object_id: payload.objectId,
       template_id: template.id,
       title: dispatchTitle,
       recipient_ids: recipientIds,
@@ -139,13 +175,14 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 500, statusMessage: 'Supabase did not return dispatch row.' })
   }
 
-  const simulatedSignedCustomers = customers.filter((_customer, index) => index % 2 === 0)
+  const simulatedSignedCustomers = eligibleCustomers.filter((_customer, index) => index % 2 === 0)
 
   if (simulatedSignedCustomers.length) {
     await $fetch(`${url}/rest/v1/signed_documents`, {
       method: 'POST',
       headers,
       body: simulatedSignedCustomers.map(customer => ({
+        object_id: payload.objectId,
         dispatch_id: dispatch.id,
         template_id: template.id,
         employee_name: customer.username,
@@ -167,7 +204,8 @@ export default eventHandler(async (event) => {
       Prefer: 'return=representation'
     },
     query: {
-      id: `eq.${dispatch.id}`
+      id: `eq.${dispatch.id}`,
+      object_id: `eq.${payload.objectId}`
     },
     body: {
       signed_count: signedCount,
@@ -182,4 +220,3 @@ export default eventHandler(async (event) => {
     templateName: template.name
   }
 })
-

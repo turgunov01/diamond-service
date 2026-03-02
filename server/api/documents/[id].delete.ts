@@ -1,9 +1,14 @@
 import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
-import { getSupabaseErrorData } from './documents'
+import { getSupabaseErrorData, parseObjectIdInput } from './documents'
+
+interface DeletedTemplateRow {
+  id: number
+}
 
 export default eventHandler(async (event) => {
   const rawId = getRouterParam(event, 'id')
   const templateId = Number(rawId)
+  const objectId = parseObjectIdInput(getQuery(event).objectId, 'objectId query param is required.')
 
   if (!rawId || !Number.isInteger(templateId) || templateId <= 0) {
     throw createError({ statusCode: 400, statusMessage: 'Invalid template id.' })
@@ -16,11 +21,12 @@ export default eventHandler(async (event) => {
   }
 
   try {
-    const rows = await $fetch<any[]>(`${url}/rest/v1/document_templates`, {
+    const rows = await $fetch<DeletedTemplateRow[]>(`${url}/rest/v1/document_templates`, {
       method: 'DELETE',
       headers,
       query: {
-        id: `eq.${templateId}`
+        id: `eq.${templateId}`,
+        object_id: `eq.${objectId}`
       }
     })
 

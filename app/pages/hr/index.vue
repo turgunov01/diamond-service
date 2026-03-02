@@ -22,6 +22,8 @@ interface Customer {
   salaryCurrency: 'UZS'
 }
 
+type CustomerStatus = 'active' | 'inactive'
+
 interface ShiftDraft {
   workShift: 'day' | 'night'
   saving: boolean
@@ -41,9 +43,12 @@ const UCheckbox = resolveComponent('UCheckbox')
 
 const toast = useToast()
 const table = useTemplateRef('table')
+const activeBuilding = useState<{ id: number, name: string } | null>('active-building')
 const customerInfoOpen = ref(false)
 const selectedCustomer = ref<Customer | null>(null)
 const deletingSelected = ref(false)
+const editCustomerOpen = ref(false)
+const editingCustomer = ref<Customer | null>(null)
 
 const hrTabs = [{
   label: 'Пользователи',
@@ -68,7 +73,10 @@ const shiftDrafts = ref<Record<number, ShiftDraft>>({})
 const salaryDrafts = ref<Record<number, SalaryDraft>>({})
 
 const { data, status, error, refresh } = await useFetch<Customer[]>('/api/customers', {
-  lazy: true
+  lazy: true,
+  query: {
+    buildingId: computed(() => activeBuilding.value?.id)
+  }
 })
 
 watch(error, (newError) => {
@@ -115,6 +123,17 @@ function openCustomerInfo(customer: Customer) {
   customerInfoOpen.value = true
 }
 
+function openCustomerEdit(customer: Customer) {
+  editingCustomer.value = customer
+  editCustomerOpen.value = true
+}
+
+watch(editCustomerOpen, (value) => {
+  if (!value) {
+    editingCustomer.value = null
+  }
+})
+
 function getRowItems(row: Row<Customer>) {
   return [
     {
@@ -130,6 +149,16 @@ function getRowItems(row: Row<Customer>) {
           title: 'Скопировано',
           description: 'ID клиента скопирован в буфер обмена'
         })
+      }
+    },
+    {
+      type: 'separator'
+    },
+    {
+      label: 'Редактировать клиента',
+      icon: 'i-lucide-pencil',
+      onSelect() {
+        openCustomerEdit(row.original)
       }
     },
     {
@@ -207,6 +236,20 @@ const userColumns: TableColumn<Customer>[] = [
       return h(UBadge, { class: 'capitalize', variant: 'subtle', color }, () =>
         row.original.workShift === 'day' ? 'день' : 'ночь'
       )
+    }
+  },
+  {
+    id: 'status',
+    header: 'Status',
+    cell: ({ row }) => {
+      return h('div', { class: 'space-y-1' }, [
+        h(UBadge, {
+          label: getCustomerStatusLabel(row.original),
+          color: getCustomerStatusColor(row.original),
+          variant: 'subtle'
+        }),
+        h('p', { class: 'text-xs text-muted' }, getCustomerStatusHint(row.original))
+      ])
     }
   },
   {
@@ -325,6 +368,42 @@ function getErrorMessage(error: unknown) {
   }
 
   return undefined
+}
+
+function getPassportFiles(passportFile: string) {
+  try {
+    const parsed = JSON.parse(passportFile) as { front?: string, back?: string }
+    const files = [
+      parsed.front ? { label: 'Лицевая сторона', value: parsed.front } : null,
+      parsed.back ? { label: 'Обратная сторона', value: parsed.back } : null
+    ].filter(Boolean)
+
+    if (files.length) {
+      return files as { label: string, value: string }[]
+    }
+  } catch {
+    // Older records can still store one file path as plain text.
+  }
+
+  return [{ label: 'Файл', value: passportFile }]
+}
+
+function getCustomerStatus(customer: Customer): CustomerStatus {
+  return customer.objectPinned.trim() ? 'active' : 'inactive'
+}
+
+function getCustomerStatusLabel(customer: Customer) {
+  return getCustomerStatus(customer) === 'active' ? 'Active' : 'Inactive'
+}
+
+function getCustomerStatusColor(customer: Customer) {
+  return getCustomerStatus(customer) === 'active' ? 'success' : 'warning'
+}
+
+function getCustomerStatusHint(customer: Customer) {
+  return getCustomerStatus(customer) === 'active'
+    ? 'Pinned to object'
+    : 'On review - waiting for changes'
 }
 
 async function deleteCustomer(customer: Customer) {
@@ -478,6 +557,10 @@ async function saveCustomerSalary(customer: Customer) {
         />
 
         <div v-if="selectedHrTab === 'users'" class="space-y-4">
+          <div class="text-sm text-muted">
+            {{ activeBuilding?.name ? `Building: ${activeBuilding.name}` : 'No building selected' }}
+          </div>
+
           <div class="flex flex-wrap items-center justify-between gap-1.5">
             <UInput
               v-model="username"
@@ -487,7 +570,7 @@ async function saveCustomerSalary(customer: Customer) {
             />
 
             <div class="flex flex-wrap items-center gap-1.5">
-              <CustomersAddModal />
+              <CustomersAddModal @saved="refresh()" />
               <CustomersBulkImport />
               <CustomersDeleteModal
                 :count="table?.tableApi?.getFilteredSelectedRowModel().rows.length"
@@ -746,7 +829,7 @@ async function saveCustomerSalary(customer: Customer) {
                   Закрепленный объект
                 </p>
                 <p class="font-medium">
-                  {{ selectedCustomer.objectPinned }}
+                  {{ selectedCustomer.objectPinned || 'On review - waiting for changes' }}
                 </p>
               </div>
               <div class="rounded-md border border-default p-3">
@@ -761,9 +844,19 @@ async function saveCustomerSalary(customer: Customer) {
                 <p class="text-xs text-muted">
                   Файл паспорта
                 </p>
-                <p class="font-medium break-all">
-                  {{ selectedCustomer.passportFile }}
-                </p>
+                <div class="space-y-2">
+                  <div
+                    v-for="passport in getPassportFiles(selectedCustomer.passportFile)"
+                    :key="passport.label"
+                  >
+                    <p class="text-xs text-muted">
+                      {{ passport.label }}
+                    </p>
+                    <p class="font-medium break-all">
+                      {{ passport.value }}
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -784,6 +877,14 @@ async function saveCustomerSalary(customer: Customer) {
           </div>
         </template>
       </UModal>
+
+      <CustomersAddModal
+        v-if="editingCustomer"
+        v-model:open="editCustomerOpen"
+        :customer="editingCustomer"
+        :hide-trigger="true"
+        @saved="refresh()"
+      />
     </template>
   </UDashboardPanel>
 </template>
