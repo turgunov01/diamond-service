@@ -5,6 +5,8 @@ type ChatRow = {
   title: string
   is_group: boolean
   updated_at: string
+  tg_chat_id?: number | null
+  tg_type?: string | null
 }
 
 type MessageRow = {
@@ -12,6 +14,9 @@ type MessageRow = {
   author_id: string
   content: string
   created_at: string
+  external_id?: number | null
+  direction?: string | null
+  status?: string | null
 }
 
 export default eventHandler(async (event) => {
@@ -41,7 +46,7 @@ export default eventHandler(async (event) => {
   const messages = await $fetch<MessageRow[]>(`${url}/rest/v1/chat_messages`, {
     headers,
     query: {
-      select: 'id,author_id,content,created_at',
+      select: 'id,author_id,content,created_at,external_id,direction,status',
       chat_id: `eq.${id}`,
       object_id: `eq.${objectId}`,
       order: 'id.desc',
@@ -54,12 +59,17 @@ export default eventHandler(async (event) => {
     title: chat.title,
     isGroup: chat.is_group,
     updatedAt: chat.updated_at,
+    tgChatId: chat.tg_chat_id || undefined,
+    tgType: chat.tg_type || undefined,
     messages: messages
       .map(m => ({
         id: m.id,
         authorId: m.author_id,
         text: m.content,
-        createdAt: m.created_at
+        createdAt: m.created_at,
+        externalId: m.external_id || undefined,
+        direction: m.direction || 'in',
+        status: m.status || 'sent'
       }))
       .reverse()
   }

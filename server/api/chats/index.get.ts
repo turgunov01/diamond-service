@@ -5,6 +5,8 @@ type ChatRow = {
   title: string
   is_group: boolean
   updated_at: string
+  tg_chat_id?: number | null
+  tg_type?: string | null
   last_message?: string | null
   last_time?: string | null
   unread?: number | null
@@ -15,6 +17,8 @@ type ChatItem = {
   title: string
   isGroup: boolean
   updatedAt: string
+  tgChatId?: number
+  tgType?: string
   lastMessage?: string
   lastTime?: string
   unread?: number
@@ -37,6 +41,8 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
         id,
         title,
         is_group,
+        tg_chat_id,
+        tg_type,
         updated_at,
         chat_messages!left(content, created_at),
         chat_messages(count)
@@ -52,6 +58,8 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
     title: row.title,
     isGroup: row.is_group,
     updatedAt: row.updated_at,
+    tgChatId: row.tg_chat_id || undefined,
+    tgType: row.tg_type || undefined,
     lastMessage: (row as any).chat_messages?.[0]?.content || undefined,
     lastTime: (row as any).chat_messages?.[0]?.created_at || undefined,
     unread: undefined
