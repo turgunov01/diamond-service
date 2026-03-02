@@ -1,91 +1,82 @@
-﻿import type { NavigationMenuItem } from '@nuxt/ui'
+import type { NavigationMenuItem } from '@nuxt/ui'
 
 type SidebarLinks = NavigationMenuItem[][]
 
 const links: SidebarLinks = [
-    [
+  [
+    {
+      label: 'Дашборд',
+      icon: 'i-lucide-line-chart',
+      to: '/'
+    },
+    {
+      label: 'Заявки',
+      icon: 'i-lucide-inbox',
+      to: '/inbox',
+      badge: '4'
+    },
+    {
+      label: 'HR',
+      icon: 'i-lucide-users',
+      to: '/hr',
+      defaultOpen: false,
+      type: 'trigger',
+      children: [
         {
-            label: 'Дашбоард',
-            icon: 'i-lucide-line-chart',
-            to: '/',
+          label: 'Сотрудники',
+          to: '/hr',
+          exact: true
         },
         {
-            label: 'Заявки',
-            icon: 'i-lucide-inbox',
-            to: '/inbox',
-            badge: '4'
-        },
-        {
-            label: 'HR',
-            icon: 'i-lucide-users',
-            to: '/hr',
-            defaultOpen: false,
-            type: 'trigger',
-            children: [
-                {
-                    label: 'Сотрудники',
-                    to: '/hr',
-                    exact: true
-                },
-                {
-                    label: 'Договоры',
-                    to: '/documents',
-                    exact: true
-                },
-                {
-                    label: 'Расходы',
-                    to: '/expenses'
-                }
-            ]
-        },
-        {
-            label: 'Объекты',
-            icon: 'i-lucide-map',
-            to: '/zones'
-        },
-        {
-            label: 'Настройки',
-            to: '/settings',
-            icon: 'i-lucide-settings',
-            defaultOpen: false,
-            type: 'trigger',
-            children: [
-                {
-                    label: 'Общее',
-                    to: '/settings',
-                    exact: true
-                },
-                {
-                    label: 'Пользователи',
-                    to: '/settings/members'
-                },
-                {
-                    label: 'Уведомления',
-                    to: '/settings/notifications'
-                },
-                {
-                    label: 'Безопасность',
-                    to: '/settings/security'
-                }
-            ]
+          label: 'Договоры',
+          to: '/documents',
+          exact: true
         }
-    ],
-    [
-        // {
-        //   label: 'Feedback',
-        //   icon: 'i-lucide-message-circle',
-        //   to: 'https://github.com/nuxt-ui-templates/dashboard',
-        //   target: '_blank'
-        // },
-        // {
-        //   label: 'Help & Support',
-        //   icon: 'i-lucide-info',
-        //   to: 'https://github.com/nuxt-ui-templates/dashboard',
-        //   target: '_blank'
-        // }
-    ]
+      ]
+    },
+    {
+      label: 'Объекты',
+      icon: 'i-lucide-map',
+      to: '/objects'
+    },
+    {
+      label: 'Чаты',
+      icon: 'i-lucide-message-circle',
+      to: '/chats'
+    },
+    {
+      label: 'Закупки',
+      icon: 'i-lucide-shopping-cart',
+      to: '/expenses'
+    },
+    {
+      label: 'Настройки',
+      to: '/settings',
+      icon: 'i-lucide-settings',
+      defaultOpen: false,
+      type: 'trigger',
+      children: [
+        {
+          label: 'Общее',
+          to: '/settings',
+          exact: true
+        },
+        {
+          label: 'Пользователи',
+          to: '/settings/members'
+        },
+        {
+          label: 'Уведомления',
+          to: '/settings/notifications'
+        },
+        {
+          label: 'Безопасность',
+          to: '/settings/security'
+        }
+      ]
+    }
+  ],
+  []
 ]
 
-export default eventHandler((): SidebarLinks => {
-    return links
-})
+export default eventHandler<SidebarLinks>(() => links)

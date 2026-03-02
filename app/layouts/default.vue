@@ -6,14 +6,11 @@ const toast = useToast()
 
 const open = ref(false)
 
-const { data: links } = await useFetch<NavigationMenuItem[][]>(
-  '/api/routes/sidebar',
-  {
-    default: () => [[], []] as NavigationMenuItem[][]
-  }
-)
+const { data: links } = await useFetch<NavigationMenuItem[][]>('/api/routes/sidebar', {
+  default: () => [[], []] as NavigationMenuItem[][]
+})
 
-const groups = computed(() => [
+const groups = computed<any[]>(() => [
   {
     id: 'links',
     label: 'Перейти',
@@ -27,16 +24,36 @@ const groups = computed(() => [
         id: 'source',
         label: 'Открыть исходник страницы',
         icon: 'i-simple-icons-github',
-        to: `https://github.com/nuxt-ui-templates/dashboard/blob/main/app/pages${
-          route.path === '/' ? '/index' : route.path
-        }.vue`,
+        to: `https://github.com/nuxt-ui-templates/dashboard/blob/main/app/pages${route.path === '/' ? '/index' : route.path}.vue`,
         target: '_blank'
       }
     ]
   }
 ])
 
-onMounted(async () => {
+const activeObject = useState<{ id: number, name: string } | null>('active-object', () => null)
+
+const { data: objects } = await useFetch<{ id: number, name: string }[]>('/api/objects', {
+  default: () => []
+})
+
+watch(objects, (list) => {
+  if (activeObject.value || !list?.length) {
+    return
+  }
+
+  const [firstObject] = list
+  if (!firstObject) {
+    return
+  }
+
+  activeObject.value = {
+    id: firstObject.id,
+    name: firstObject.name
+  }
+})
+
+onMounted(() => {
   const cookie = useCookie('cookie-consent')
   if (cookie.value === 'accepted') {
     return

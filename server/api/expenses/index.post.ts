@@ -16,6 +16,7 @@ interface CreateExpenseBody {
   dueDate?: string
   notes?: string
   status?: ExpenseStatus
+  objectId?: number
 }
 
 function requiredTrimmedString(value: unknown, fieldName: string) {
@@ -39,6 +40,7 @@ function parseCreateBody(body: unknown): CreateExpenseBody {
   const category = requiredTrimmedString(input.category, 'category')
   const vendor = requiredTrimmedString(input.vendor, 'vendor')
   const plannedAmount = parseNonNegativeInt(input.plannedAmount, 'plannedAmount')
+  const objectId = parseNonNegativeInt(input.objectId, 'objectId')
 
   let status: ExpenseStatus = 'draft'
   if (input.status !== undefined) {
@@ -60,7 +62,8 @@ function parseCreateBody(body: unknown): CreateExpenseBody {
     actualAmount,
     dueDate: typeof input.dueDate === 'string' && input.dueDate.length ? input.dueDate : undefined,
     notes: typeof input.notes === 'string' && input.notes.trim().length ? input.notes.trim() : undefined,
-    status
+    status,
+    objectId
   }
 }
 
@@ -83,7 +86,8 @@ export default eventHandler(async (event) => {
       currency: 'UZS',
       due_date: payload.dueDate || null,
       status: payload.status,
-      notes: payload.notes || null
+      notes: payload.notes || null,
+      object_id: payload.objectId
     }
   })
 

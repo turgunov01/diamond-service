@@ -19,6 +19,7 @@ const range = shallowRef<Range>({
   start: sub(new Date(), { days: 14 }),
   end: new Date()
 })
+
 const period = ref<Period>('daily')
 </script>
 
@@ -53,7 +54,6 @@ const period = ref<Period>('daily')
       <UDashboardToolbar>
         <template #left>
           <HomeDateRangePicker v-model="range" class="-ms-1" />
-
         </template>
       </UDashboardToolbar>
     </template>
@@ -61,7 +61,6 @@ const period = ref<Period>('daily')
     <template #body>
       <HomeStats :period="period" :range="range" />
       <HomeChart :period="period" :range="range" />
-      <HomeSales :period="period" :range="range" />
     </template>
   </UDashboardPanel>
 </template>
