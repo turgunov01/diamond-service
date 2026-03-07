@@ -58,7 +58,7 @@ const categories = [
 
 const activeObject = useState<{ id: number, name: string } | null>('active-object')
 
-const { data, error, refresh, execute } = await useFetch<ExpensesResponse>('/api/expenses', {
+const { data, error, refresh, execute, status, pending } = await useFetch<ExpensesResponse>('/api/expenses', {
   default: () => ({
     items: [],
     summary: {
@@ -77,6 +77,8 @@ const { data, error, refresh, execute } = await useFetch<ExpensesResponse>('/api
   },
   immediate: false
 })
+
+const isLoading = computed(() => pending.value || status.value === 'pending')
 
 watch(activeObject, (val) => {
   if (val?.id) {
@@ -240,91 +242,121 @@ async function setStatus(item: ExpenseRecord, status: ExpenseStatus) {
     <template #body>
       <div class="space-y-4">
         <div class="grid gap-3 sm:grid-cols-3">
-          <div class="rounded-lg border border-default p-4 bg-elevated/30">
-            <p class="text-xs text-muted">План</p>
-            <p class="text-lg font-semibold">{{ formatCurrency(data.summary.totalPlanned) }}</p>
-          </div>
-          <div class="rounded-lg border border-default p-4 bg-elevated/30">
-            <p class="text-xs text-muted">Факт</p>
-            <p class="text-lg font-semibold">{{ formatCurrency(data.summary.totalActual) }}</p>
-          </div>
-          <div class="rounded-lg border border-default p-4 bg-elevated/30">
-            <p class="text-xs text-muted">Оплачено</p>
-            <p class="text-lg font-semibold">{{ data.summary.byStatus.paid || 0 }}</p>
-          </div>
+          <template v-if="isLoading">
+            <div
+              v-for="n in 3"
+              :key="`expense-card-${n}`"
+              class="rounded-lg border border-default p-4 bg-elevated/30 animate-pulse space-y-3"
+            >
+              <div class="h-3 w-16 bg-default/60 rounded" />
+              <div class="h-5 w-24 bg-default/70 rounded" />
+            </div>
+          </template>
+          <template v-else>
+            <div class="rounded-lg border border-default p-4 bg-elevated/30">
+              <p class="text-xs text-muted">План</p>
+              <p class="text-lg font-semibold">{{ formatCurrency(data.summary.totalPlanned) }}</p>
+            </div>
+            <div class="rounded-lg border border-default p-4 bg-elevated/30">
+              <p class="text-xs text-muted">Факт</p>
+              <p class="text-lg font-semibold">{{ formatCurrency(data.summary.totalActual) }}</p>
+            </div>
+            <div class="rounded-lg border border-default p-4 bg-elevated/30">
+              <p class="text-xs text-muted">Оплачено</p>
+              <p class="text-lg font-semibold">{{ data.summary.byStatus.paid || 0 }}</p>
+            </div>
+          </template>
         </div>
 
         <div class="rounded-lg border border-default overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead>
-              <tr class="bg-elevated/50">
-                <th class="px-3 py-2 text-left">ID</th>
-                <th class="px-3 py-2 text-left">Статья</th>
-                <th class="px-3 py-2 text-left">Категория</th>
-                <th class="px-3 py-2 text-left">Поставщик</th>
-                <th class="px-3 py-2 text-left">План</th>
-                <th class="px-3 py-2 text-left">Факт</th>
-                <th class="px-3 py-2 text-left">Срок</th>
-                <th class="px-3 py-2 text-left">Статус</th>
-                <th class="px-3 py-2 text-right">Действие</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="item in data.items"
-                :key="item.id"
-                class="border-t border-default"
+          <template v-if="isLoading">
+            <div class="divide-y divide-default">
+              <div
+                v-for="n in 6"
+                :key="`expense-row-${n}`"
+                class="flex items-center gap-3 px-3 py-3 animate-pulse"
               >
-                <td class="px-3 py-2">{{ item.id }}</td>
-                <td class="px-3 py-2">
-                  <p class="font-medium">{{ item.title }}</p>
-                  <p class="text-xs text-muted">{{ item.notes || 'Без комментариев' }}</p>
-                </td>
-                <td class="px-3 py-2">{{ item.category }}</td>
-                <td class="px-3 py-2">{{ item.vendor }}</td>
-                <td class="px-3 py-2">{{ formatCurrency(item.plannedAmount) }}</td>
-                <td class="px-3 py-2">{{ formatCurrency(item.actualAmount || 0) }}</td>
-                <td class="px-3 py-2">{{ formatDate(item.dueDate) }}</td>
-                <td class="px-3 py-2">
-                  <UBadge :label="statusLabel(item.status)" :color="statusColor(item.status)" variant="subtle" />
-                </td>
-                <td class="px-3 py-2 text-right">
-                  <UDropdownMenu
-                    :items="[
-                      {
-                        label: 'Согласовать',
-                        icon: 'i-lucide-check',
-                        onSelect: () => setStatus(item, 'approved')
-                      },
-                      {
-                        label: 'Отклонить',
-                        icon: 'i-lucide-x',
-                        onSelect: () => setStatus(item, 'rejected')
-                      },
-                      {
-                        label: 'Отметить как оплачено',
-                        icon: 'i-lucide-wallet',
-                        onSelect: () => setStatus(item, 'paid')
-                      }
-                    ]"
-                    :content="{ align: 'end' }"
-                  >
-                    <UButton
-                      icon="i-lucide-ellipsis-vertical"
-                      color="neutral"
-                      variant="ghost"
-                      :loading="updatingId === item.id"
-                    />
-                  </UDropdownMenu>
-                </td>
-              </tr>
-              <tr v-if="!data.items.length">
-                <td class="px-3 py-4 text-muted" colspan="9">
-                  Расходов пока нет.
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                <div class="h-4 w-10 bg-default/60 rounded" />
+                <div class="h-4 w-40 bg-default/70 rounded" />
+                <div class="h-4 w-24 bg-default/50 rounded" />
+                <div class="h-4 w-32 bg-default/50 rounded" />
+                <div class="h-4 w-20 bg-default/60 rounded" />
+                <div class="h-4 w-16 bg-default/50 rounded" />
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="bg-elevated/50">
+                  <th class="px-3 py-2 text-left">ID</th>
+                  <th class="px-3 py-2 text-left">Статья</th>
+                  <th class="px-3 py-2 text-left">Категория</th>
+                  <th class="px-3 py-2 text-left">Поставщик</th>
+                  <th class="px-3 py-2 text-left">План</th>
+                  <th class="px-3 py-2 text-left">Факт</th>
+                  <th class="px-3 py-2 text-left">Срок</th>
+                  <th class="px-3 py-2 text-left">Статус</th>
+                  <th class="px-3 py-2 text-right">Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="item in data.items"
+                  :key="item.id"
+                  class="border-t border-default"
+                >
+                  <td class="px-3 py-2">{{ item.id }}</td>
+                  <td class="px-3 py-2">
+                    <p class="font-medium">{{ item.title }}</p>
+                    <p class="text-xs text-muted">{{ item.notes || 'Без комментариев' }}</p>
+                  </td>
+                  <td class="px-3 py-2">{{ item.category }}</td>
+                  <td class="px-3 py-2">{{ item.vendor }}</td>
+                  <td class="px-3 py-2">{{ formatCurrency(item.plannedAmount) }}</td>
+                  <td class="px-3 py-2">{{ formatCurrency(item.actualAmount || 0) }}</td>
+                  <td class="px-3 py-2">{{ formatDate(item.dueDate) }}</td>
+                  <td class="px-3 py-2">
+                    <UBadge :label="statusLabel(item.status)" :color="statusColor(item.status)" variant="subtle" />
+                  </td>
+                  <td class="px-3 py-2 text-right">
+                    <UDropdownMenu
+                      :items="[
+                        {
+                          label: 'Согласовать',
+                          icon: 'i-lucide-check',
+                          onSelect: () => setStatus(item, 'approved')
+                        },
+                        {
+                          label: 'Отклонить',
+                          icon: 'i-lucide-x',
+                          onSelect: () => setStatus(item, 'rejected')
+                        },
+                        {
+                          label: 'Отметить как оплачено',
+                          icon: 'i-lucide-wallet',
+                          onSelect: () => setStatus(item, 'paid')
+                        }
+                      ]"
+                      :content="{ align: 'end' }"
+                    >
+                      <UButton
+                        icon="i-lucide-ellipsis-vertical"
+                        color="neutral"
+                        variant="ghost"
+                        :loading="updatingId === item.id"
+                      />
+                    </UDropdownMenu>
+                  </td>
+                </tr>
+                <tr v-if="!data.items.length">
+                  <td class="px-3 py-4 text-muted" colspan="9">
+                    Расходов пока нет.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
         </div>
       </div>
 

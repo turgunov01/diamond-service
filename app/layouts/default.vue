@@ -25,16 +25,16 @@ const { data: links } = await useFetch<NavigationMenuItem[][]>('/api/routes/side
 const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => [
   {
     id: 'links',
-    label: 'РџРµСЂРµР№С‚Рё',
+    label: 'Перейти',
     items: ((links.value ?? []).flat() as CommandPaletteItem[])
   },
   {
     id: 'code',
-    label: 'РљРѕРґ',
+    label: 'Код',
     items: [
       {
         id: 'source',
-        label: 'РћС‚РєСЂС‹С‚СЊ РёСЃС…РѕРґРЅРёРє СЃС‚СЂР°РЅРёС†С‹',
+        label: 'Открыть исходник страницы',
         icon: 'i-simple-icons-github',
         to: `https://github.com/nuxt-ui-templates/dashboard/blob/main/app/pages${route.path === '/' ? '/index' : route.path}.vue`,
         target: '_blank'
@@ -116,12 +116,12 @@ onMounted(() => {
   }
 
   toast.add({
-    title: 'РњС‹ РёСЃРїРѕР»СЊР·СѓРµРј С„Р°Р№Р»С‹ cookie РґР»СЏ СѓР»СѓС‡С€РµРЅРёСЏ РІР°С€РµРіРѕ РѕРїС‹С‚Р° РЅР° СЃР°Р№С‚Рµ.',
+    title: 'Мы используем файлы cookie для улучшения вашего опыта на сайте.',
     duration: 0,
     close: false,
     actions: [
       {
-        label: 'РџСЂРёРЅСЏС‚СЊ',
+        label: 'Принять',
         color: 'neutral',
         variant: 'outline',
         onClick: () => {
@@ -129,7 +129,7 @@ onMounted(() => {
         }
       },
       {
-        label: 'РћС‚РєР»РѕРЅРёС‚СЊ',
+        label: 'Отклонить',
         color: 'neutral',
         variant: 'ghost'
       }
