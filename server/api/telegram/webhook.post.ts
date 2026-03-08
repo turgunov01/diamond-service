@@ -5,6 +5,7 @@ type TgUser = { id: number, first_name?: string, last_name?: string, username?: 
 type TgChat = { id: number, type: string, title?: string, first_name?: string, last_name?: string, username?: string }
 type TgPhoto = { file_id: string }
 type TgDocument = { file_id: string, file_name?: string }
+type TgAnimation = { file_id: string, mime_type?: string }
 type TgMessage = {
   message_id: number
   from?: TgUser
@@ -13,6 +14,7 @@ type TgMessage = {
   caption?: string
   photo?: TgPhoto[]
   document?: TgDocument
+  animation?: TgAnimation
   date: number
 }
 type TgUpdate = { update_id: number, message?: TgMessage }
@@ -48,12 +50,19 @@ export default eventHandler(async (event) => {
   const text = msg.text || msg.caption || null
   const photo = msg.photo
   const document = msg.document
+  const animation = msg.animation
 
   let mediaUrl: string | null = null
   if (photo?.length) {
     const largest = photo[photo.length - 1]
     try {
       mediaUrl = await getTelegramFileUrl(largest.file_id)
+    } catch {
+      mediaUrl = null
+    }
+  } else if (animation?.file_id) {
+    try {
+      mediaUrl = await getTelegramFileUrl(animation.file_id)
     } catch {
       mediaUrl = null
     }

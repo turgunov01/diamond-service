@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 type ActiveBuilding = {
   id: number
   name: string
@@ -31,6 +31,7 @@ interface ChatMessage {
   direction: 'in' | 'out'
   status: 'pending' | 'sent' | 'delivered' | 'error'
   imageUrl?: string
+  mediaKind?: 'image' | 'video'
 }
 
 interface ChatDetail {
@@ -312,6 +313,12 @@ function mergeChatDetail(detail: ChatDetail) {
   }
 
   const merged = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const latestExistingId = selectedConversation.value.messages[selectedConversation.value.messages.length - 1]?.id
+  const latestMergedId = merged[merged.length - 1]?.id
+  if (latestExistingId === latestMergedId && selectedConversation.value.updatedAt === detail.updatedAt) {
+    return
+  }
+
   selectedConversation.value = {
     ...selectedConversation.value,
     ...detail,
@@ -338,7 +345,23 @@ async function fetchAndMergeChatList() {
   if (!buildingId.value) return
   try {
     const rows = await $fetch<ChatItem[]>('/api/chats', { query: { buildingId: buildingId.value } })
-    chatList.value = rows
+    const current = new Map(chatList.value.map(item => [item.id, item]))
+    const merged: ChatItem[] = []
+
+    for (const row of rows) {
+      const existing = current.get(row.id)
+      const hasImage = detectImageUrl(row.lastMessage)
+      const displayLastMessage = hasImage ? '📷 Фото' : row.lastMessage
+      const keepExisting = existing && existing.updatedAt === row.updatedAt
+      merged.push({
+        ...existing,
+        ...row,
+        lastMessage: keepExisting ? existing!.lastMessage : displayLastMessage,
+        lastTime: row.lastTime || row.updatedAt
+      })
+    }
+
+    chatList.value = merged
   } catch (err) {
     console.error('refresh chat list failed', err)
   }
@@ -474,15 +497,19 @@ function detectImageUrl(text?: string) {
   if (!urlMatch) return undefined
   const url = urlMatch[0]
   const lower = url.toLowerCase()
-  const hasExt = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif)$/i.test(lower)
+  const hasImgExt = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif)$/i.test(lower)
+  const hasVideoExt = /\.(mp4|webm)$/i.test(lower)
   const isTgFile = lower.includes('/file/bot')
-  return (hasExt || isTgFile) ? url : undefined
+  return (hasImgExt || hasVideoExt || isTgFile) ? url : undefined
 }
 
 function normalizeMessage(message: ChatMessage): ChatMessage {
+  const detected = detectImageUrl(message.text)
+  const isVideo = detected ? /\.(mp4|webm|gif)$/i.test(detected.toLowerCase()) : false
   return {
     ...message,
-    imageUrl: message.imageUrl || detectImageUrl(message.text)
+    imageUrl: message.imageUrl || detected,
+    mediaKind: isVideo ? 'video' : 'image'
   }
 }
 
@@ -505,6 +532,25 @@ function openPreview(src: string) {
   previewOpen.value = true
 }
 
+function getImageUrl(message: ChatMessage) {
+  return message.imageUrl || detectImageUrl(message.text)
+}
+
+function handleVideoLoaded(e: Event, id: string | number) {
+  const el = e.target as HTMLVideoElement
+  imageLoaded[id] = true
+  try {
+    el.play()
+  } catch {}
+}
+
+function isVideoMedia(message: ChatMessage) {
+  const url = getImageUrl(message)
+  if (!url) return false
+  const clean = url.split('?')[0].toLowerCase()
+  return /\.(mp4|webm|gif)$/.test(clean) || message.mediaKind === 'video'
+}
+
 function getErrorMessage(fetchError: unknown) {
   if (fetchError && typeof fetchError === 'object') {
     const err = fetchError as { data?: { statusMessage?: string }, message?: string }
@@ -515,6 +561,7 @@ function getErrorMessage(fetchError: unknown) {
 }
 
 async function sendMessage() {
+
   if (!selectedConversation.value || sendingMessage.value) {
     return
   }
@@ -523,6 +570,8 @@ async function sendMessage() {
   if (!content) {
     return
   }
+
+  messageText.value = ''
 
   sendingMessage.value = true
 
@@ -548,8 +597,6 @@ async function sendMessage() {
       }
     })
 
-    messageText.value = ''
-
     const idx = selectedConversation.value.messages.findIndex(msg => msg.id === tempId)
     if (idx !== -1) {
       selectedConversation.value.messages[idx] = saved
@@ -562,12 +609,14 @@ async function sendMessage() {
     if (pending) {
       pending.status = 'error'
     }
+    messageText.value = ''
     toast.add({
       title: 'Не удалось отправить сообщение',
       description: getErrorMessage(fetchError) || 'Повторите попытку.',
       color: 'error'
     })
   } finally {
+    messageText.value = ''
     sendingMessage.value = false
   }
 }
@@ -637,15 +686,16 @@ function closeContextMenu() {
 
 async function deleteChat(chatId?: number | null) {
   const targetId = chatId ?? selectedChatId.value
+  const numericId = Number(targetId)
 
-  if (!targetId || deletingChat.value) {
+  if (!Number.isInteger(numericId) || numericId <= 0 || deletingChat.value) {
     return
   }
 
   deletingChat.value = true
 
   try {
-    await $fetch(`/api/chats/${targetId}`, {
+    await $fetch(`/api/chats/${numericId}`, {
       method: 'DELETE'
     })
 
@@ -654,11 +704,11 @@ async function deleteChat(chatId?: number | null) {
       color: 'success'
     })
 
-    if (selectedChatId.value === targetId) {
+    if (selectedChatId.value === numericId) {
       selectedChatId.value = null
     }
     closeContextMenu()
-    await refreshChats()
+    chatList.value = chatList.value.filter(chat => chat.id !== numericId)
   } catch (err) {
     toast.add({
       title: 'Не удалось удалить чат',
@@ -785,8 +835,13 @@ async function deleteChat(chatId?: number | null) {
                   <UAvatar v-if="msg.direction !== 'out'" :alt="getDisplayName(msg)"
                     :text="getInitials(getDisplayName(msg))" size="md" />
                   <div class="relative max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm" :class="msg.direction === 'out'
-                    ? 'bg-primary text-white rounded-br-none'
-                    : 'bg-elevated text-highlighted rounded-bl-none border border-default/60'">
+                    ? [
+                      'bg-primary text-white rounded-br-none',
+                      msg.status === 'pending' ? 'opacity-70' : 'opacity-100',
+                      msg.status === 'error' ? 'bg-error text-white' : ''
+                    ] : [
+                      'bg-elevated text-highlighted rounded-bl-none border border-default/60'
+                    ]">
                     <div class="flex items-center justify-between gap-2 text-[12px] mb-1">
                       <span class="font-semibold" :class="msg.direction === 'out' ? 'text-white' : 'text-emerald-700'">
                         {{ getDisplayName(msg) }}
@@ -795,18 +850,18 @@ async function deleteChat(chatId?: number | null) {
                         {{ formatMessageTime(msg.createdAt) }}
                       </span>
                     </div>
-                    <div v-if="msg.imageUrl" class="mt-1">
+                    <div v-if="getImageUrl(msg)" class="mt-1">
                       <div
-                        class="relative overflow-hidden rounded-xl bg-default/30 cursor-pointer"
+                        class="relative overflow-hidden rounded-xl bg-default/30 cursor-pointer w-[300px]"
                         :class="msg.direction === 'out' ? 'border border-white/10' : 'border border-default/60'"
                         @click="imageRequested[msg.id] = true"
                       >
                         <template v-if="!imageRequested[msg.id]">
                           <div
                             class="absolute inset-0 backdrop-blur-md flex items-center justify-center"
-                            :style="`background-image:url('${msg.imageUrl}'); background-size:cover; background-position:center; filter: blur(12px); transform: scale(1.05);`"
+                            :style="`background-image:url('${getImageUrl(msg)}'); background-size:cover; background-position:center; filter: blur(12px); transform: scale(1.05);`"
                           />
-                          <div class="relative h-48 flex items-center justify-center">
+                          <div class="relative h-[300px] flex items-center justify-center">
                             <div class="h-12 w-12 rounded-full bg-black/60 text-white flex items-center justify-center">
                               <span class="i-lucide-download" />
                             </div>
@@ -816,21 +871,36 @@ async function deleteChat(chatId?: number | null) {
                           <div
                             v-if="!imageLoaded[msg.id]"
                             class="absolute inset-0 backdrop-blur-md"
-                            :style="`background-image:url('${msg.imageUrl}'); background-size:cover; background-position:center; filter: blur(12px); transform: scale(1.05);`"
+                            :style="`background-image:url('${getImageUrl(msg)}'); background-size:cover; background-position:center; filter: blur(12px); transform: scale(1.05);`"
+                          />
+                          <video
+                            v-if="isVideoMedia(msg)"
+                            :src="getImageUrl(msg)"
+                            class="relative max-h-[300px] w-[300px] h-[300px] object-contain transition-opacity duration-300 cursor-pointer"
+                            :class="imageLoaded[msg.id] ? 'opacity-100' : 'opacity-0'"
+                            playsinline
+                            autoplay
+                            loop
+                            muted
+                            preload="auto"
+                            @loadeddata="handleVideoLoaded($event, msg.id)"
+                            @canplay="handleVideoLoaded($event, msg.id)"
+                            @click.stop="imageLoaded[msg.id] && openPreview(getImageUrl(msg)!)"
                           />
                           <img
-                            :src="msg.imageUrl"
-                            class="relative max-h-72 w-full object-contain transition-opacity duration-300 cursor-pointer"
+                            v-else
+                            :src="getImageUrl(msg)"
+                            class="relative max-h-[300px] w-[300px] h-[300px] object-contain transition-opacity duration-300 cursor-pointer"
                             :class="imageLoaded[msg.id] ? 'opacity-100' : 'opacity-0'"
                             loading="lazy"
                             @load="imageLoaded[msg.id] = true"
-                            @click.stop="imageLoaded[msg.id] && openPreview(msg.imageUrl!)"
+                            @click.stop="imageLoaded[msg.id] && openPreview(getImageUrl(msg)!)"
                           >
                         </template>
                       </div>
                     </div>
                     <p
-                      v-if="!msg.imageUrl || msg.text !== msg.imageUrl"
+                      v-if="!getImageUrl(msg) || msg.text !== getImageUrl(msg)"
                       class="whitespace-pre-wrap break-words mt-1"
                     >
                       {{ msg.text }}
