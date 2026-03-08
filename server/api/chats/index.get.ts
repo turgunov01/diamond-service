@@ -5,7 +5,7 @@ type ChatRow = {
   title: string
   is_group: boolean
   updated_at: string
-  object_id: number
+  object_id?: number | null
   tg_chat_id?: number | null
   tg_type?: string | null
 }
@@ -26,7 +26,7 @@ type ChatItem = {
   title: string
   isGroup: boolean
   updatedAt: string
-  objectId: number
+  objectId: number | null
   objectName?: string
   tgChatId?: number
   tgType?: string
@@ -47,10 +47,6 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
   const objectId = objectIdRaw ? Number(objectIdRaw) : NaN
   const buildingId = buildingIdRaw ? Number(buildingIdRaw) : NaN
 
-  if ((!Number.isInteger(objectId) || objectId <= 0) && (!Number.isInteger(buildingId) || buildingId <= 0)) {
-    throw createError({ statusCode: 400, statusMessage: 'objectId or buildingId query param is required' })
-  }
-
   let objectIds: number[] = []
   const objectsById = new Map<number, ObjectRow>()
 
@@ -69,7 +65,7 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
     if (objectRow) {
       objectsById.set(objectRow.id, objectRow)
     }
-  } else {
+  } else if (Number.isInteger(buildingId) && buildingId > 0) {
     const objectRows = await $fetch<ObjectRow[]>(`${url}/rest/v1/objects`, {
       headers,
       query: {
@@ -85,15 +81,11 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
     }
   }
 
-  if (!objectIds.length) {
-    return []
-  }
-
   const rows = await $fetch<ChatRow[]>(`${url}/rest/v1/chats`, {
     headers,
     query: {
       select: 'id,title,is_group,tg_chat_id,tg_type,updated_at,object_id',
-      object_id: `in.${encodePostgrestIn(objectIds)}`,
+      ...(objectIds.length ? { object_id: `in.${encodePostgrestIn(objectIds)}` } : {}),
       order: 'updated_at.desc',
       limit: 200
     }
@@ -101,6 +93,25 @@ export default eventHandler(async (event): Promise<ChatItem[]> => {
 
   if (!rows.length) {
     return []
+  }
+
+  // Collect missing object names if not prefetched
+  const missingObjectIds = rows
+    .map(r => r.object_id)
+    .filter((id): id is number => !!id && !objectsById.has(id))
+
+  if (missingObjectIds.length) {
+    const objectRows = await $fetch<ObjectRow[]>(`${url}/rest/v1/objects`, {
+      headers,
+      query: {
+        select: 'id,name',
+        id: `in.${encodePostgrestIn([...new Set(missingObjectIds)])}`
+      }
+    }).catch(() => [] as ObjectRow[])
+
+    for (const row of objectRows) {
+      objectsById.set(row.id, row)
+    }
   }
 
   const messageRows = await $fetch<ChatMessageRow[]>(`${url}/rest/v1/chat_messages`, {

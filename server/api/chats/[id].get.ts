@@ -5,6 +5,7 @@ type ChatRow = {
   title: string
   is_group: boolean
   updated_at: string
+  object_id?: number | null
   tg_chat_id?: number | null
   tg_type?: string | null
 }
@@ -25,18 +26,12 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: 'Invalid chat id' })
   }
 
-  const objectIdRaw = getQuery(event).objectId
-  const objectId = objectIdRaw ? Number(objectIdRaw) : NaN
-  if (!Number.isInteger(objectId) || objectId <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'objectId query param is required' })
-  }
-
   const { url, serviceRoleKey } = getSupabaseServerConfig()
   const headers = getSupabaseServerHeaders(serviceRoleKey)
 
   const [chat] = await $fetch<ChatRow[]>(`${url}/rest/v1/chats`, {
     headers,
-    query: { select: '*', id: `eq.${id}`, object_id: `eq.${objectId}`, limit: 1 }
+    query: { select: '*', id: `eq.${id}`, limit: 1 }
   })
 
   if (!chat) {
@@ -48,7 +43,6 @@ export default eventHandler(async (event) => {
     query: {
       select: 'id,author_id,content,created_at,external_id,direction,status',
       chat_id: `eq.${id}`,
-      object_id: `eq.${objectId}`,
       order: 'id.desc',
       limit: 100
     }
@@ -59,6 +53,7 @@ export default eventHandler(async (event) => {
     title: chat.title,
     isGroup: chat.is_group,
     updatedAt: chat.updated_at,
+    objectId: chat.object_id || null,
     tgChatId: chat.tg_chat_id || undefined,
     tgType: chat.tg_type || undefined,
     messages: messages

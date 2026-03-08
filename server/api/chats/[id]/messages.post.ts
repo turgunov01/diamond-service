@@ -4,12 +4,12 @@ import { sendTelegramMessage } from '../../../utils/telegram'
 interface Body {
   authorId: string
   content: string
-  objectId?: number
 }
 
 interface ChatRow {
   id: number
   tg_chat_id?: number | null
+  object_id?: number | null
 }
 
 interface TelegramSendResponse {
@@ -29,9 +29,6 @@ export default eventHandler(async (event) => {
   if (!body?.authorId || !body?.content) {
     throw createError({ statusCode: 400, statusMessage: 'authorId and content are required' })
   }
-  if (!body.objectId || body.objectId <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'objectId is required' })
-  }
 
   const { url, serviceRoleKey } = getSupabaseServerConfig()
   const headers = getSupabaseServerHeaders(serviceRoleKey)
@@ -42,13 +39,12 @@ export default eventHandler(async (event) => {
     query: {
       select: '*',
       id: `eq.${chatId}`,
-      object_id: `eq.${body.objectId}`,
       limit: 1
     }
   })
 
   if (!chat) {
-    throw createError({ statusCode: 404, statusMessage: 'Chat not found for this object' })
+    throw createError({ statusCode: 404, statusMessage: 'Chat not found' })
   }
 
   const insertedRows = await $fetch<Array<{ id: number }>>(`${url}/rest/v1/chat_messages`, {
@@ -61,7 +57,7 @@ export default eventHandler(async (event) => {
       chat_id: chatId,
       author_id: body.authorId,
       content: body.content,
-      object_id: body.objectId,
+      object_id: chat.object_id ?? null,
       direction: 'out',
       status: 'sent'
     }

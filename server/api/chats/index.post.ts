@@ -12,9 +12,6 @@ export default eventHandler(async (event) => {
   if (!body?.title) {
     throw createError({ statusCode: 400, statusMessage: 'title is required' })
   }
-  if (!body.objectId || body.objectId <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'objectId is required' })
-  }
 
   const { url, serviceRoleKey } = getSupabaseServerConfig()
   const headers = getSupabaseServerHeaders(serviceRoleKey)
@@ -28,7 +25,7 @@ export default eventHandler(async (event) => {
     body: {
       title: body.title,
       is_group: body.isGroup ?? true,
-      object_id: body.objectId
+      object_id: body.objectId || null
     }
   })
 
@@ -44,7 +41,7 @@ export default eventHandler(async (event) => {
       body: body.memberIds.map(id => ({
         chat_id: chat.id,
         user_id: id,
-        object_id: body.objectId
+        object_id: body.objectId || null
       }))
     })
   }

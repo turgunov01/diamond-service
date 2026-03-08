@@ -12,6 +12,7 @@ const router = useRouter()
 const toast = useToast()
 const activeBuilding = useState<{ id: number, name: string } | null>('active-building')
 const activeObject = useState<{ id: number, name: string } | null>('active-object')
+const visibleObjects = useState<number[]>('visible-objects', () => [])
 
 const { data: objects, error, status } = await useFetch<ObjectItem[]>('/api/objects', {
   default: () => [],
@@ -47,36 +48,36 @@ function openCreatePage() {
 }
 
 function toggleObject(item: ObjectItem, enabled: boolean) {
-  if (!enabled && activeObject.value?.id !== item.id) {
-    return
-  }
+  const current = new Set(visibleObjects.value)
 
-  if (!enabled) {
-    activeObject.value = null
+  if (enabled) {
+    current.add(item.id)
+    visibleObjects.value = Array.from(current)
+
+    if (!activeObject.value) {
+      activeObject.value = { id: item.id, name: item.name }
+    }
 
     toast.add({
-      title: 'Object deactivated',
+      title: 'Object activated',
       description: item.name,
-      color: 'info'
+      color: 'success'
     })
     return
   }
+
+  // Disable
+  current.delete(item.id)
+  visibleObjects.value = Array.from(current)
 
   if (activeObject.value?.id === item.id) {
-    toast.add({
-      title: 'Object is already selected',
-      description: item.name,
-      color: 'info'
-    })
-    return
+    activeObject.value = null
   }
 
-  activeObject.value = { id: item.id, name: item.name }
-
   toast.add({
-    title: 'Active object updated',
+    title: 'Object deactivated',
     description: item.name,
-    color: 'success'
+    color: 'info'
   })
 }
 </script>
@@ -154,16 +155,16 @@ function toggleObject(item: ObjectItem, enabled: boolean) {
                 {{ item.code || '-' }}
               </td>
               <td class="px-3 py-2">
-                <UBadge
-                  :label="activeObject?.id === item.id ? 'Active' : 'Inactive'"
-                  :color="activeObject?.id === item.id ? 'primary' : 'neutral'"
-                  variant="subtle"
-                />
+                  <UBadge
+                    :label="visibleObjects.includes(item.id) ? 'Active' : 'Inactive'"
+                    :color="visibleObjects.includes(item.id) ? 'primary' : 'neutral'"
+                    variant="subtle"
+                  />
               </td>
               <td class="px-3 py-2 text-right">
                 <div class="flex justify-end">
                   <USwitch
-                    :model-value="activeObject?.id === item.id"
+                    :model-value="visibleObjects.includes(item.id)"
                     @update:model-value="toggleObject(item, $event)"
                   />
                 </div>
