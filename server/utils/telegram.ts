@@ -29,6 +29,25 @@ export function verifyTelegramSecret(event: H3Event) {
   return !!header && WEBHOOK_SECRET.includes(header)
 }
 
+export async function getTelegramFileUrl(fileId: string) {
+  assertBotToken()
+  const fileResp = await $fetch<{ ok: boolean, result?: { file_path?: string } }>(
+    `https://api.telegram.org/bot${BOT_TOKEN}/getFile`,
+    {
+      method: 'POST',
+      body: { file_id: fileId }
+    }
+  )
+
+  const path = fileResp?.result?.file_path
+  if (!fileResp?.ok || !path) {
+    throw createError({ statusCode: 502, statusMessage: 'Failed to resolve Telegram file' })
+  }
+
+  // Publicly accessible file URL
+  return `https://api.telegram.org/file/bot${BOT_TOKEN}/${path}`
+}
+
 export function getDefaultObjectId(): number {
   if (!Number.isInteger(DEFAULT_OBJECT_ID) || DEFAULT_OBJECT_ID <= 0) {
     throw createError({ statusCode: 500, statusMessage: 'Set TELEGRAM_DEFAULT_OBJECT_ID env to valid object id' })

@@ -1,9 +1,20 @@
 import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../utils/supabase'
-import { getDefaultObjectId, verifyTelegramSecret } from '../../utils/telegram'
+import { getDefaultObjectId, getTelegramFileUrl, verifyTelegramSecret } from '../../utils/telegram'
 
 type TgUser = { id: number, first_name?: string, last_name?: string, username?: string }
 type TgChat = { id: number, type: string, title?: string, first_name?: string, last_name?: string, username?: string }
-type TgMessage = { message_id: number, from?: TgUser, chat: TgChat, text?: string, date: number }
+type TgPhoto = { file_id: string }
+type TgDocument = { file_id: string, file_name?: string }
+type TgMessage = {
+  message_id: number
+  from?: TgUser
+  chat: TgChat
+  text?: string
+  caption?: string
+  photo?: TgPhoto[]
+  document?: TgDocument
+  date: number
+}
 type TgUpdate = { update_id: number, message?: TgMessage }
 
 type TelegramBindingRow = {
@@ -34,9 +45,35 @@ export default eventHandler(async (event) => {
 
   const msg = update.message
   const chat = msg.chat
-  const text = msg.text
-  if (!text) {
-    return { ok: true }
+  const text = msg.text || msg.caption || null
+  const photo = msg.photo
+  const document = msg.document
+
+  let mediaUrl: string | null = null
+  if (photo?.length) {
+    const largest = photo[photo.length - 1]
+    try {
+      mediaUrl = await getTelegramFileUrl(largest.file_id)
+    } catch {
+      mediaUrl = null
+    }
+  } else if (document?.file_id) {
+    try {
+      mediaUrl = await getTelegramFileUrl(document.file_id)
+    } catch {
+      mediaUrl = null
+    }
+  }
+
+  let content: string | null = null
+  if (text && mediaUrl) {
+    content = `${text}\n${mediaUrl}`
+  } else if (text) {
+    content = text
+  } else if (mediaUrl) {
+    content = mediaUrl
+  } else {
+    content = '[media]'
   }
 
   const { url, serviceRoleKey } = getSupabaseServerConfig()
@@ -134,7 +171,7 @@ export default eventHandler(async (event) => {
     body: {
       chat_id: chatId,
       author_id: String(msg.from?.id || 'unknown'),
-      content: text,
+      content,
       external_id: msg.message_id,
       direction: 'in',
       status: 'delivered',

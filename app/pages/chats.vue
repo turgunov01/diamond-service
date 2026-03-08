@@ -30,6 +30,7 @@ interface ChatMessage {
   createdAt: string
   direction: 'in' | 'out'
   status: 'pending' | 'sent' | 'delivered' | 'error'
+  imageUrl?: string
 }
 
 interface ChatDetail {
@@ -66,6 +67,12 @@ const stream = ref<EventSource | null>(null)
 const streamReconnect = ref<ReturnType<typeof setTimeout> | null>(null)
 const supabaseClient = ref<SupabaseClient | null>(null)
 const realtimeChannel = ref<RealtimeChannel | null>(null)
+const refreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const chatListTimer = ref<ReturnType<typeof setInterval> | null>(null)
+const imageRequested = reactive<Record<string | number, boolean>>({})
+const imageLoaded = reactive<Record<string | number, boolean>>({})
+const previewSrc = ref<string | null>(null)
+const previewOpen = ref(false)
 
 const buildingId = computed(() => activeBuilding.value?.id ?? null)
 
@@ -155,6 +162,10 @@ const selectedChatMeta = computed(() => chatList.value.find(chat => chat.id === 
 watch(buildingId, () => {
   selectedChatId.value = null
   messageText.value = ''
+  if (chatListTimer.value) {
+    clearInterval(chatListTimer.value)
+    chatListTimer.value = null
+  }
 })
 
 const {
@@ -192,12 +203,14 @@ function updateChatListMeta(chatId: number, message: ChatMessage) {
   const entry = chatList.value.find(chat => chat.id === chatId)
   if (!entry) return
 
-  entry.lastMessage = message.text
+  entry.lastMessage = message.imageUrl ? '📷 Фото' : message.text
   entry.lastTime = message.createdAt
   entry.updatedAt = message.createdAt
 }
 
 function upsertMessage(chatId: number, incoming: ChatMessage) {
+  incoming = normalizeMessage(incoming)
+
   if (selectedConversation.value?.id !== chatId) {
     // Update list meta even if another chat is open
     updateChatListMeta(chatId, incoming)
@@ -271,6 +284,66 @@ function handleRealtimeRow(row: any) {
   scrollToBottomSoon()
 }
 
+function mergeChatDetail(detail: ChatDetail) {
+  if (!detail) return
+
+  if (!selectedConversation.value || selectedConversation.value.id !== detail.id) {
+    selectedConversation.value = {
+      ...detail,
+      messages: detail.messages.map(normalizeMessage)
+    }
+    return
+  }
+
+  const existing = selectedConversation.value.messages
+  const byId = new Map<string | number, ChatMessage>()
+  for (const msg of existing) {
+    byId.set(msg.id, msg)
+  }
+
+  for (const incomingRaw of detail.messages) {
+    const incoming = normalizeMessage(incomingRaw)
+    const prev = byId.get(incoming.id)
+    if (prev) {
+      byId.set(incoming.id, { ...prev, ...incoming })
+    } else {
+      byId.set(incoming.id, incoming)
+    }
+  }
+
+  const merged = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  selectedConversation.value = {
+    ...selectedConversation.value,
+    ...detail,
+    messages: merged
+  }
+
+  const latest = merged[merged.length - 1]
+  if (latest) {
+    updateChatListMeta(detail.id, latest)
+  }
+}
+
+async function fetchAndMergeSelectedConversation() {
+  if (!selectedChatId.value) return
+  try {
+    const detail = await $fetch<ChatDetail>(`/api/chats/${selectedChatId.value}`)
+    mergeChatDetail(detail)
+  } catch (err) {
+    console.error('refresh conversation failed', err)
+  }
+}
+
+async function fetchAndMergeChatList() {
+  if (!buildingId.value) return
+  try {
+    const rows = await $fetch<ChatItem[]>('/api/chats', { query: { buildingId: buildingId.value } })
+    chatList.value = rows
+  } catch (err) {
+    console.error('refresh chat list failed', err)
+  }
+}
+
 async function startRealtime() {
   if (!process.client) return
   const config = useRuntimeConfig()
@@ -321,13 +394,42 @@ function scrollToBottomSoon() {
 if (process.client) {
   watch(selectedChatId, (id) => {
     closeStream()
+    if (refreshTimer.value) {
+      clearInterval(refreshTimer.value)
+    }
     if (id) {
       openStream(id)
+      refreshTimer.value = setInterval(() => {
+        fetchAndMergeSelectedConversation()
+      }, 1000)
+      fetchAndMergeSelectedConversation()
     }
   })
 
+  watch(buildingId, () => {
+    if (chatListTimer.value) {
+      clearInterval(chatListTimer.value)
+      chatListTimer.value = null
+    }
+    if (buildingId.value) {
+      fetchAndMergeChatList()
+      chatListTimer.value = setInterval(() => {
+        fetchAndMergeChatList()
+      }, 1000)
+    }
+  }, { immediate: true })
+
   onBeforeUnmount(() => {
     closeStream()
+    if (supabaseClient.value && realtimeChannel.value) {
+      supabaseClient.value.removeChannel(realtimeChannel.value)
+    }
+    if (refreshTimer.value) {
+      clearInterval(refreshTimer.value)
+    }
+    if (chatListTimer.value) {
+      clearInterval(chatListTimer.value)
+    }
   })
 
   watch(() => selectedConversation.value?.messages.length, () => {
@@ -336,6 +438,10 @@ if (process.client) {
 
   watch(chatList, () => {
     startRealtime()
+  })
+
+  watch(selectedConversation, () => {
+    scrollToBottomSoon()
   })
 
   startRealtime()
@@ -360,6 +466,43 @@ function formatMessageTime(value: string) {
     hour: '2-digit',
     minute: '2-digit'
   })
+}
+
+function detectImageUrl(text?: string) {
+  if (!text) return undefined
+  const urlMatch = text.match(/https?:\/\/\S+/)
+  if (!urlMatch) return undefined
+  const url = urlMatch[0]
+  const lower = url.toLowerCase()
+  const hasExt = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif)$/i.test(lower)
+  const isTgFile = lower.includes('/file/bot')
+  return (hasExt || isTgFile) ? url : undefined
+}
+
+function normalizeMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    imageUrl: message.imageUrl || detectImageUrl(message.text)
+  }
+}
+
+function getDisplayName(message: ChatMessage) {
+  if (message.authorId === 'dashboard-user') return 'Вы'
+  if (/^\d+$/.test(message.authorId)) return `User ${message.authorId}`
+  return message.authorId || 'Неизвестно'
+}
+
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return 'U'
+  const first = parts[0][0] || ''
+  const second = parts[1]?.[0] || parts[0][1] || ''
+  return (first + second).toUpperCase()
+}
+
+function openPreview(src: string) {
+  previewSrc.value = src
+  previewOpen.value = true
 }
 
 function getErrorMessage(fetchError: unknown) {
@@ -537,49 +680,23 @@ async function deleteChat(chatId?: number | null) {
         </template>
 
         <template #right>
-          <UBadge
-            v-if="activeBuilding"
-            :label="activeBuilding.name"
-            color="neutral"
-            variant="subtle"
-          />
-          <UButton
-            v-if="selectedChatId"
-            icon="i-lucide-trash"
-            color="error"
-            variant="ghost"
-            :loading="deletingChat"
-            @click="deleteChat"
-          />
-          <UButton
-            icon="i-lucide-plus"
-            label="Новый чат"
-            :disabled="!activeBuilding"
-            @click="newChatOpen = true"
-          />
+          <UBadge v-if="activeBuilding" :label="activeBuilding.name" color="neutral" variant="subtle" />
+          <UButton v-if="selectedChatId" icon="i-lucide-trash" color="error" variant="ghost" :loading="deletingChat"
+            @click="deleteChat" />
+          <UButton icon="i-lucide-plus" label="Новый чат" :disabled="!activeBuilding" @click="newChatOpen = true" />
         </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
       <div class="space-y-4">
-        <UAlert
-          v-if="!activeBuilding"
-          color="warning"
-          variant="subtle"
-          title="Здание не выбрано"
-          description="Выберите здание в Team menu, чтобы увидеть связанные с ним чаты."
-        />
+        <UAlert v-if="!activeBuilding" color="warning" variant="subtle" title="Здание не выбрано"
+          description="Выберите здание в Team menu, чтобы увидеть связанные с ним чаты." />
 
         <div class="grid gap-4 lg:grid-cols-[360px_1fr] h-[calc(100vh-160px)]">
           <div class="rounded-xl border border-default bg-elevated/50 flex flex-col overflow-hidden">
             <div class="p-3 space-y-3" @click="closeContextMenu">
-              <UInput
-                v-model="search"
-                icon="i-lucide-search"
-                placeholder="Поиск"
-                size="sm"
-              />
+              <UInput v-model="search" icon="i-lucide-search" placeholder="Поиск" size="sm" />
 
               <p class="text-xs text-muted">
                 Всего чатов: {{ isChatListLoading ? '—' : chatList.length }}
@@ -587,11 +704,7 @@ async function deleteChat(chatId?: number | null) {
             </div>
 
             <div v-if="isChatListLoading" class="divide-y divide-default overflow-y-auto">
-              <div
-                v-for="n in 8"
-                :key="`chat-skeleton-${n}`"
-                class="px-3 py-3 flex gap-3 animate-pulse"
-              >
+              <div v-for="n in 8" :key="`chat-skeleton-${n}`" class="px-3 py-3 flex gap-3 animate-pulse">
                 <div class="h-10 w-10 rounded-full bg-default/70" />
                 <div class="min-w-0 flex-1 space-y-2">
                   <div class="flex items-center justify-between gap-3">
@@ -605,14 +718,10 @@ async function deleteChat(chatId?: number | null) {
             </div>
 
             <div v-else class="divide-y divide-default overflow-y-auto">
-              <button
-                v-for="chat in filteredChats"
-                :key="chat.id"
+              <button v-for="chat in filteredChats" :key="chat.id"
                 class="w-full text-left px-3 py-3 hover:bg-elevated/70 transition flex gap-3"
                 :class="chat.id === selectedChatId ? 'bg-primary/10 ring-1 ring-primary/30' : ''"
-                @click="selectedChatId = chat.id; closeContextMenu()"
-                @contextmenu="openContextMenu($event, chat.id)"
-              >
+                @click="selectedChatId = chat.id; closeContextMenu()" @contextmenu="openContextMenu($event, chat.id)">
                 <UAvatar :alt="chat.title" :text="chat.title.slice(0, 1).toUpperCase()" size="md" />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center justify-between gap-3">
@@ -622,30 +731,16 @@ async function deleteChat(chatId?: number | null) {
                     <span class="text-xs text-muted">{{ formatListTime(chat.lastTime || chat.updatedAt) }}</span>
                   </div>
                   <div class="flex items-center gap-2 text-[11px] text-muted mt-0.5">
-                    <UBadge
-                      v-if="chat.objectName"
-                      :label="chat.objectName"
-                      color="neutral"
-                      variant="subtle"
-                    />
+                    <UBadge v-if="chat.objectName" :label="chat.objectName" color="neutral" variant="subtle" />
                   </div>
                   <p class="text-sm text-muted truncate">
                     {{ chat.lastMessage || 'Сообщений пока нет' }}
                   </p>
                 </div>
-                <UBadge
-                  v-if="chat.unread"
-                  :label="chat.unread"
-                  color="primary"
-                  variant="solid"
-                  class="self-center"
-                />
+                <UBadge v-if="chat.unread" :label="chat.unread" color="primary" variant="solid" class="self-center" />
               </button>
 
-              <div
-                v-if="!filteredChats.length && chatListStatus !== 'pending'"
-                class="px-4 py-6 text-sm text-muted"
-              >
+              <div v-if="!filteredChats.length && chatListStatus !== 'pending'" class="px-4 py-6 text-sm text-muted">
                 Чатов пока нет.
               </div>
             </div>
@@ -653,12 +748,8 @@ async function deleteChat(chatId?: number | null) {
 
           <div class="rounded-xl border border-default bg-elevated/30 flex flex-col overflow-hidden">
             <div class="px-4 py-3 flex items-center gap-3 border-b border-default">
-              <UAvatar
-                v-if="selectedConversation"
-                :alt="selectedConversation.title"
-                :text="selectedConversation.title.slice(0, 1).toUpperCase()"
-                size="md"
-              />
+              <UAvatar v-if="selectedConversation" :alt="selectedConversation.title"
+                :text="selectedConversation.title.slice(0, 1).toUpperCase()" size="md" />
               <div class="min-w-0 flex-1">
                 <p class="font-semibold truncate">
                   {{ selectedConversation?.title || 'Выберите чат' }}
@@ -667,83 +758,96 @@ async function deleteChat(chatId?: number | null) {
                   <span>
                     {{ selectedConversation?.isGroup ? 'Групповой чат' : 'Личный чат' }}
                   </span>
-                  <UBadge
-                    v-if="selectedChatMeta?.objectName"
-                    :label="selectedChatMeta.objectName"
-                    color="neutral"
-                    variant="subtle"
-                  />
+                  <UBadge v-if="selectedChatMeta?.objectName" :label="selectedChatMeta.objectName" color="neutral"
+                    variant="subtle" />
                 </p>
               </div>
-              <UButton
-                v-if="selectedChatId"
-                icon="i-lucide-trash"
-                color="error"
-                variant="ghost"
-                size="sm"
-                :loading="deletingChat"
-                @click="deleteChat(selectedChatId)"
-              />
+              <UButton v-if="selectedChatId" icon="i-lucide-trash" color="error" variant="ghost" size="sm"
+                :loading="deletingChat" @click="deleteChat(selectedChatId)" />
             </div>
 
-            <div
-              ref="messagesContainer"
-              class="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-[radial-gradient(circle_at_10%_20%,rgba(255,255,255,0.05),transparent_25%),radial-gradient(circle_at_90%_10%,rgba(255,255,255,0.05),transparent_20%)]"
-            >
+            <div ref="messagesContainer"
+              class="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-[radial-gradient(circle_at_10%_20%,rgba(255,255,255,0.05),transparent_25%),radial-gradient(circle_at_90%_10%,rgba(255,255,255,0.05),transparent_20%)]">
               <template v-if="isChatDetailLoading">
-                <div
-                  v-for="n in 6"
-                  :key="`msg-skeleton-${n}`"
-                  class="flex"
-                  :class="n % 2 === 0 ? 'justify-end' : 'justify-start'"
-                >
-                  <div
-                    class="max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm animate-pulse"
-                    :class="n % 2 === 0
-                      ? 'bg-primary/50 text-white rounded-br-none'
-                      : 'bg-elevated text-highlighted rounded-bl-none border border-default/60'"
-                  >
+                <div v-for="n in 6" :key="`msg-skeleton-${n}`" class="flex"
+                  :class="n % 2 === 0 ? 'justify-end' : 'justify-start'">
+                  <div class="max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm animate-pulse" :class="n % 2 === 0
+                    ? 'bg-primary/50 text-white rounded-br-none'
+                    : 'bg-elevated text-highlighted rounded-bl-none border border-default/60'">
                     <div class="h-3 w-32 bg-default/60 rounded" />
                     <div class="h-3 w-24 bg-default/50 rounded mt-1" />
                   </div>
                 </div>
               </template>
               <template v-else>
-                <div
-                  v-for="msg in selectedConversation?.messages || []"
-                  :key="msg.id"
-                  class="flex"
-                  :class="msg.direction === 'out' ? 'justify-end' : 'justify-start'"
-                >
-                  <div
-                    class="relative max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm"
-                    :class="msg.direction === 'out'
-                      ? 'bg-primary text-white rounded-br-none'
-                      : 'bg-elevated text-highlighted rounded-bl-none border border-default/60'"
-                  >
-                    <p>{{ msg.text }}</p>
-                    <span class="block text-[11px] opacity-70 mt-1 text-right">
-                      {{ formatMessageTime(msg.createdAt) }}
-                    </span>
-                    <span
-                      v-if="msg.direction === 'out'"
-                      class="absolute -bottom-2 -right-1 text-[11px] flex items-center gap-1 text-white/80"
+                <div v-for="msg in selectedConversation?.messages || []" :key="msg.id" class="flex items-start gap-2"
+                  :class="msg.direction === 'out' ? 'justify-end text-right' : 'justify-start text-left'">
+                  <UAvatar v-if="msg.direction !== 'out'" :alt="getDisplayName(msg)"
+                    :text="getInitials(getDisplayName(msg))" size="md" />
+                  <div class="relative max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm" :class="msg.direction === 'out'
+                    ? 'bg-primary text-white rounded-br-none'
+                    : 'bg-elevated text-highlighted rounded-bl-none border border-default/60'">
+                    <div class="flex items-center justify-between gap-2 text-[12px] mb-1">
+                      <span class="font-semibold" :class="msg.direction === 'out' ? 'text-white' : 'text-emerald-700'">
+                        {{ getDisplayName(msg) }}
+                      </span>
+                      <span class="text-[11px]" :class="msg.direction === 'out' ? 'text-white/80' : 'text-muted'">
+                        {{ formatMessageTime(msg.createdAt) }}
+                      </span>
+                    </div>
+                    <div v-if="msg.imageUrl" class="mt-1">
+                      <div
+                        class="relative overflow-hidden rounded-xl bg-default/30 cursor-pointer"
+                        :class="msg.direction === 'out' ? 'border border-white/10' : 'border border-default/60'"
+                        @click="imageRequested[msg.id] = true"
+                      >
+                        <template v-if="!imageRequested[msg.id]">
+                          <div
+                            class="absolute inset-0 backdrop-blur-md flex items-center justify-center"
+                            :style="`background-image:url('${msg.imageUrl}'); background-size:cover; background-position:center; filter: blur(12px); transform: scale(1.05);`"
+                          />
+                          <div class="relative h-48 flex items-center justify-center">
+                            <div class="h-12 w-12 rounded-full bg-black/60 text-white flex items-center justify-center">
+                              <span class="i-lucide-download" />
+                            </div>
+                          </div>
+                        </template>
+                        <template v-else>
+                          <div
+                            v-if="!imageLoaded[msg.id]"
+                            class="absolute inset-0 backdrop-blur-md"
+                            :style="`background-image:url('${msg.imageUrl}'); background-size:cover; background-position:center; filter: blur(12px); transform: scale(1.05);`"
+                          />
+                          <img
+                            :src="msg.imageUrl"
+                            class="relative max-h-72 w-full object-contain transition-opacity duration-300 cursor-pointer"
+                            :class="imageLoaded[msg.id] ? 'opacity-100' : 'opacity-0'"
+                            loading="lazy"
+                            @load="imageLoaded[msg.id] = true"
+                            @click.stop="imageLoaded[msg.id] && openPreview(msg.imageUrl!)"
+                          >
+                        </template>
+                      </div>
+                    </div>
+                    <p
+                      v-if="!msg.imageUrl || msg.text !== msg.imageUrl"
+                      class="whitespace-pre-wrap break-words mt-1"
                     >
-                      <span
-                        v-if="msg.status === 'pending'"
-                        class="i-lucide-loader-2 animate-spin"
-                      />
+                      {{ msg.text }}
+                    </p>
+                    <span v-if="msg.direction === 'out'"
+                      class="absolute -bottom-2 -right-1 text-[11px] flex items-center gap-1 text-white/80">
+                      <span v-if="msg.status === 'pending'" class="i-lucide-loader-2 animate-spin" />
                       <span v-else-if="msg.status === 'delivered'" class="i-lucide-checks" />
                       <span v-else-if="msg.status === 'sent'" class="i-lucide-check" />
                       <span v-else-if="msg.status === 'error'" class="i-lucide-alert-circle text-error-200" />
                     </span>
                   </div>
+                  <UAvatar v-if="msg.direction === 'out'" :alt="getDisplayName(msg)"
+                    :text="getInitials(getDisplayName(msg))" size="md" />
                 </div>
 
-                <div
-                  v-if="!selectedConversation?.messages.length"
-                  class="text-sm text-muted"
-                >
+                <div v-if="!selectedConversation?.messages.length" class="text-sm text-muted">
                   Сообщений пока нет.
                 </div>
               </template>
@@ -751,81 +855,52 @@ async function deleteChat(chatId?: number | null) {
 
             <div class="px-4 py-3 border-t border-default bg-elevated/60">
               <div class="flex items-center gap-2">
-                <UInput
-                  v-model="messageText"
-                  placeholder="Написать сообщение"
-                  class="flex-1"
-                  :disabled="!selectedConversation || isChatDetailLoading"
-                  @keyup.enter="sendMessage"
-                />
-                <UButton
-                  icon="i-lucide-send"
-                  label="Отправить"
-                  :disabled="!selectedConversation || isChatDetailLoading"
-                  :loading="sendingMessage"
-                  @click="sendMessage"
-                />
+                <UInput v-model="messageText" placeholder="Написать сообщение" class="flex-1"
+                  :disabled="!selectedConversation || isChatDetailLoading" @keyup.enter="sendMessage" />
+                <UButton icon="i-lucide-send" label="Отправить" :disabled="!selectedConversation || isChatDetailLoading"
+                  :loading="sendingMessage" @click="sendMessage" />
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <UModal
-        v-model:open="newChatOpen"
-        title="Новый чат"
-        description="Чат будет создан без привязки к объекту."
-      >
+      <UModal v-model:open="newChatOpen" title="Новый чат" description="Чат будет создан без привязки к объекту.">
         <template #body>
           <div class="space-y-4">
             <UFormField label="Название">
-              <UInput
-                v-model="newChatTitle"
-                class="w-full"
-                placeholder="Например, Смена охраны"
-              />
+              <UInput v-model="newChatTitle" class="w-full" placeholder="Например, Смена охраны" />
             </UFormField>
 
             <div class="flex items-center justify-end gap-2">
-              <UButton
-                label="Отмена"
-                color="neutral"
-                variant="subtle"
-                :disabled="creatingChat"
-                @click="newChatOpen = false"
-              />
-              <UButton
-                label="Создать"
-                icon="i-lucide-plus"
-                :loading="creatingChat"
-                @click="createChat"
-              />
+              <UButton label="Отмена" color="neutral" variant="subtle" :disabled="creatingChat"
+                @click="newChatOpen = false" />
+              <UButton label="Создать" icon="i-lucide-plus" :loading="creatingChat" @click="createChat" />
             </div>
           </div>
         </template>
       </UModal>
 
-      <div
-        v-if="contextMenu.open"
-        class="fixed inset-0 z-40"
-        @click="closeContextMenu"
-      />
-      <div
-        v-if="contextMenu.open"
+      <UModal v-model:open="previewOpen" title="Просмотр изображения"
+        @update:open="(val) => { if (!val) { previewOpen = false; previewSrc = null } }">
+        <template #body>
+          <div class="flex justify-center">
+            <img v-if="previewSrc" :src="previewSrc" class="max-h-[80vh] rounded-xl" />
+          </div>
+        </template>
+      </UModal>
+
+      <div v-if="contextMenu.open" class="fixed inset-0 z-40" @click="closeContextMenu" />
+      <div v-if="contextMenu.open"
         class="fixed z-50 rounded-lg border border-default bg-elevated shadow-lg p-2 space-y-1 w-44"
-        :style="{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }"
-      >
-        <button
-          class="w-full text-left px-2 py-1.5 rounded hover:bg-default flex items-center gap-2 text-sm text-error"
-          @click="deleteChat(contextMenu.chatId)"
-        >
+        :style="{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }">
+        <button class="w-full text-left px-2 py-1.5 rounded hover:bg-default flex items-center gap-2 text-sm text-error"
+          @click="deleteChat(contextMenu.chatId)">
           <span class="i-lucide-trash" />
           <span>Удалить чат</span>
         </button>
-        <button
-          class="w-full text-left px-2 py-1.5 rounded hover:bg-default flex items-center gap-2 text-sm"
-          @click="closeContextMenu"
-        >
+        <button class="w-full text-left px-2 py-1.5 rounded hover:bg-default flex items-center gap-2 text-sm"
+          @click="closeContextMenu">
           <span class="i-lucide-x" />
           <span>Отмена</span>
         </button>
