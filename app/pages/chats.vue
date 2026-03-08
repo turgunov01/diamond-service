@@ -24,12 +24,12 @@ interface ChatItem {
 }
 
 interface ChatMessage {
-  id: number
+  id: number | string
   authorId: string
   text: string
   createdAt: string
   direction: 'in' | 'out'
-  status: 'sent' | 'delivered' | 'error'
+  status: 'pending' | 'sent' | 'delivered' | 'error'
 }
 
 interface ChatDetail {
@@ -40,6 +40,8 @@ interface ChatDetail {
   objectId?: number | null
   messages: ChatMessage[]
 }
+
+import { nextTick } from 'vue'
 
 const toast = useToast()
 
@@ -59,6 +61,9 @@ const contextMenu = reactive({
   x: 0,
   y: 0
 })
+const messagesContainer = ref<HTMLElement | null>(null)
+const stream = ref<EventSource | null>(null)
+const streamReconnect = ref<ReturnType<typeof setTimeout> | null>(null)
 
 const buildingId = computed(() => activeBuilding.value?.id ?? null)
 
@@ -171,6 +176,104 @@ const {
 
 const isChatDetailLoading = computed(() => chatDetailStatus.value === 'pending')
 
+function closeStream() {
+  if (streamReconnect.value) {
+    clearTimeout(streamReconnect.value)
+    streamReconnect.value = null
+  }
+
+  stream.value?.close()
+  stream.value = null
+}
+
+function updateChatListMeta(chatId: number, message: ChatMessage) {
+  const entry = chatList.value.find(chat => chat.id === chatId)
+  if (!entry) return
+
+  entry.lastMessage = message.text
+  entry.lastTime = message.createdAt
+  entry.updatedAt = message.createdAt
+}
+
+function upsertMessage(chatId: number, incoming: ChatMessage) {
+  if (selectedConversation.value?.id !== chatId) {
+    // Update list meta even if another chat is open
+    updateChatListMeta(chatId, incoming)
+    return
+  }
+
+  const messages = selectedConversation.value.messages
+
+  const pendingIdx = messages.findIndex(msg =>
+    msg.status === 'pending' &&
+    msg.direction === incoming.direction &&
+    msg.text === incoming.text
+  )
+
+  if (pendingIdx !== -1) {
+    messages[pendingIdx] = incoming
+  } else if (!messages.some(msg => msg.id === incoming.id)) {
+    messages.push(incoming)
+  }
+
+  updateChatListMeta(chatId, incoming)
+}
+
+function openStream(chatId: number) {
+  closeStream()
+  const since = selectedConversation.value?.messages?.[selectedConversation.value.messages.length - 1]?.createdAt
+  const url = since
+    ? `/api/chats/${chatId}/stream?since=${encodeURIComponent(since)}`
+    : `/api/chats/${chatId}/stream`
+
+  const es = new EventSource(url)
+
+  es.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data)
+      if (payload?.type === 'message' && payload.message) {
+        upsertMessage(payload.chatId, payload.message as ChatMessage)
+        scrollToBottomSoon()
+      }
+    } catch (err) {
+      console.error('Stream parse error', err)
+    }
+  }
+
+  es.onerror = () => {
+    es.close()
+    streamReconnect.value = setTimeout(() => openStream(chatId), 2000)
+  }
+
+  stream.value = es
+}
+
+if (process.client) {
+  watch(selectedChatId, (id) => {
+    closeStream()
+    if (id) {
+      openStream(id)
+    }
+  })
+
+onBeforeUnmount(() => {
+  closeStream()
+})
+
+function scrollToBottomSoon() {
+  if (!process.client) return
+  requestAnimationFrame(() => {
+    const el = messagesContainer.value
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  })
+}
+
+watch(() => selectedConversation.value?.messages.length, () => {
+  scrollToBottomSoon()
+})
+}
+
 function formatListTime(value?: string) {
   if (!value) {
     return ''
@@ -213,8 +316,21 @@ async function sendMessage() {
 
   sendingMessage.value = true
 
+  const tempId = `temp-${Date.now()}`
+  const optimistic: ChatMessage = {
+    id: tempId,
+    authorId: 'dashboard-user',
+    text: content,
+    createdAt: new Date().toISOString(),
+    direction: 'out',
+    status: 'pending'
+  }
+  selectedConversation.value.messages.push(optimistic)
+  updateChatListMeta(selectedConversation.value.id, optimistic)
+  scrollToBottomSoon()
+
   try {
-    await $fetch(`/api/chats/${selectedConversation.value.id}/messages`, {
+    const saved = await $fetch<ChatMessage>(`/api/chats/${selectedConversation.value.id}/messages`, {
       method: 'POST',
       body: {
         authorId: 'dashboard-user',
@@ -223,8 +339,19 @@ async function sendMessage() {
     })
 
     messageText.value = ''
-    await Promise.all([refreshChats(), refreshConversation()])
+
+    const idx = selectedConversation.value.messages.findIndex(msg => msg.id === tempId)
+    if (idx !== -1) {
+      selectedConversation.value.messages[idx] = saved
+    } else {
+      selectedConversation.value.messages.push(saved)
+    }
+    updateChatListMeta(selectedConversation.value.id, saved)
   } catch (fetchError: unknown) {
+    const pending = selectedConversation.value.messages.find(msg => msg.id === tempId)
+    if (pending) {
+      pending.status = 'error'
+    }
     toast.add({
       title: 'Не удалось отправить сообщение',
       description: getErrorMessage(fetchError) || 'Повторите попытку.',
@@ -492,7 +619,10 @@ async function deleteChat(chatId?: number | null) {
               />
             </div>
 
-            <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-[radial-gradient(circle_at_10%_20%,rgba(255,255,255,0.05),transparent_25%),radial-gradient(circle_at_90%_10%,rgba(255,255,255,0.05),transparent_20%)]">
+            <div
+              ref="messagesContainer"
+              class="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-[radial-gradient(circle_at_10%_20%,rgba(255,255,255,0.05),transparent_25%),radial-gradient(circle_at_90%_10%,rgba(255,255,255,0.05),transparent_20%)]"
+            >
               <template v-if="isChatDetailLoading">
                 <div
                   v-for="n in 6"
@@ -519,7 +649,7 @@ async function deleteChat(chatId?: number | null) {
                   :class="msg.direction === 'out' ? 'justify-end' : 'justify-start'"
                 >
                   <div
-                    class="max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm"
+                    class="relative max-w-[70%] rounded-2xl px-3 py-2 text-sm shadow-sm"
                     :class="msg.direction === 'out'
                       ? 'bg-primary text-white rounded-br-none'
                       : 'bg-elevated text-highlighted rounded-bl-none border border-default/60'"
@@ -527,6 +657,18 @@ async function deleteChat(chatId?: number | null) {
                     <p>{{ msg.text }}</p>
                     <span class="block text-[11px] opacity-70 mt-1 text-right">
                       {{ formatMessageTime(msg.createdAt) }}
+                    </span>
+                    <span
+                      v-if="msg.direction === 'out'"
+                      class="absolute -bottom-2 -right-1 text-[11px] flex items-center gap-1 text-white/80"
+                    >
+                      <span
+                        v-if="msg.status === 'pending'"
+                        class="i-lucide-loader-2 animate-spin"
+                      />
+                      <span v-else-if="msg.status === 'delivered'" class="i-lucide-checks" />
+                      <span v-else-if="msg.status === 'sent'" class="i-lucide-check" />
+                      <span v-else-if="msg.status === 'error'" class="i-lucide-alert-circle text-error-200" />
                     </span>
                   </div>
                 </div>

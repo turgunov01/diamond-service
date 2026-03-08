@@ -19,6 +19,13 @@ interface TelegramSendResponse {
   message_id?: number
 }
 
+type InsertedRow = {
+  id: number
+  created_at: string
+  external_id?: number | null
+  status?: string | null
+}
+
 export default eventHandler(async (event) => {
   const chatId = Number(getRouterParam(event, 'id'))
   if (!Number.isInteger(chatId) || chatId <= 0) {
@@ -47,7 +54,7 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Chat not found' })
   }
 
-  const insertedRows = await $fetch<Array<{ id: number }>>(`${url}/rest/v1/chat_messages`, {
+  const insertedRows = await $fetch<Array<InsertedRow>>(`${url}/rest/v1/chat_messages`, {
     method: 'POST',
     headers: {
       ...headers,
@@ -68,6 +75,9 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 500, statusMessage: 'Supabase did not return created message id' })
   }
 
+  let finalStatus: 'sent' | 'delivered' | 'error' = 'sent'
+  let externalId: number | null | undefined = inserted.external_id ?? null
+
   await $fetch(`${url}/rest/v1/chats`, {
     method: 'PATCH',
     headers,
@@ -80,27 +90,37 @@ export default eventHandler(async (event) => {
   if (chat.tg_chat_id) {
     try {
       const sent = await sendTelegramMessage(chat.tg_chat_id, body.content) as TelegramSendResponse
-      const externalId = sent?.result?.message_id || sent?.message_id
+      externalId = sent?.result?.message_id || sent?.message_id
+      finalStatus = 'delivered'
 
       await $fetch(`${url}/rest/v1/chat_messages`, {
         method: 'PATCH',
         headers,
         query: { id: `eq.${inserted.id}` },
         body: {
-          status: 'delivered',
+          status: finalStatus,
           external_id: externalId ?? null
         }
       })
     } catch {
+      finalStatus = 'error'
       await $fetch(`${url}/rest/v1/chat_messages`, {
         method: 'PATCH',
         headers,
         query: { id: `eq.${inserted.id}` },
-        body: { status: 'error' }
+        body: { status: finalStatus }
       })
       throw createError({ statusCode: 502, statusMessage: 'Failed to send to Telegram' })
     }
   }
 
-  return inserted
+  return {
+    id: inserted.id,
+    authorId: body.authorId,
+    text: body.content,
+    createdAt: inserted.created_at,
+    direction: 'out',
+    status: finalStatus,
+    externalId: externalId ?? undefined
+  }
 })

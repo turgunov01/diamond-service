@@ -7,6 +7,8 @@
 //   TELEGRAM_WEBHOOK_SECRET (recommended)
 //   TELEGRAM_ALLOWED_UPDATES (JSON array, default ["message","my_chat_member"])
 
+import 'dotenv/config'
+
 const token = process.env.TELEGRAM_BOT_TOKEN
 const url = process.env.TELEGRAM_WEBHOOK_URL
 const secret = process.env.TELEGRAM_WEBHOOK_SECRET
