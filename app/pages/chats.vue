@@ -41,7 +41,7 @@ interface ChatDetail {
   messages: ChatMessage[]
 }
 
-import { nextTick } from 'vue'
+import { createClient, type SupabaseClient, type RealtimeChannel } from '@supabase/supabase-js'
 
 const toast = useToast()
 
@@ -64,6 +64,8 @@ const contextMenu = reactive({
 const messagesContainer = ref<HTMLElement | null>(null)
 const stream = ref<EventSource | null>(null)
 const streamReconnect = ref<ReturnType<typeof setTimeout> | null>(null)
+const supabaseClient = ref<SupabaseClient | null>(null)
+const realtimeChannel = ref<RealtimeChannel | null>(null)
 
 const buildingId = computed(() => activeBuilding.value?.id ?? null)
 
@@ -248,17 +250,64 @@ function openStream(chatId: number) {
   stream.value = es
 }
 
-if (process.client) {
-  watch(selectedChatId, (id) => {
-    closeStream()
-    if (id) {
-      openStream(id)
-    }
-  })
+function handleRealtimeRow(row: any) {
+  const chatId = Number(row.chat_id)
+  if (!chatId) return
 
-onBeforeUnmount(() => {
-  closeStream()
-})
+  const message: ChatMessage = {
+    id: row.id,
+    authorId: row.author_id,
+    text: row.content,
+    createdAt: row.created_at,
+    externalId: row.external_id || undefined,
+    direction: (row.direction as 'in' | 'out' | null) || 'in',
+    status: (row.status as ChatMessage['status']) || 'sent'
+  }
+
+  const knownChat = chatList.value.some(c => c.id === chatId)
+  if (!knownChat) return
+
+  upsertMessage(chatId, message)
+  scrollToBottomSoon()
+}
+
+async function startRealtime() {
+  if (!process.client) return
+  const config = useRuntimeConfig()
+  if (!config.public.supabaseUrl || !config.public.supabaseAnonKey) return
+
+  if (!supabaseClient.value) {
+    supabaseClient.value = createClient(config.public.supabaseUrl, config.public.supabaseAnonKey)
+  }
+
+  const client = supabaseClient.value
+  if (!client) return
+
+  if (realtimeChannel.value) {
+    client.removeChannel(realtimeChannel.value)
+    realtimeChannel.value = null
+  }
+
+  const chatIds = chatList.value.map(c => c.id).filter(Boolean)
+  const filter = chatIds.length ? `chat_id=in.(${chatIds.join(',')})` : undefined
+
+  const channel = client.channel('chat-messages-realtime')
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'chat_messages',
+      ...(filter ? { filter } : {})
+    }, (payload) => handleRealtimeRow(payload.new))
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'chat_messages',
+      ...(filter ? { filter } : {})
+    }, (payload) => handleRealtimeRow(payload.new))
+
+  realtimeChannel.value = channel
+  await channel.subscribe()
+}
 
 function scrollToBottomSoon() {
   if (!process.client) return
@@ -269,9 +318,27 @@ function scrollToBottomSoon() {
   })
 }
 
-watch(() => selectedConversation.value?.messages.length, () => {
-  scrollToBottomSoon()
-})
+if (process.client) {
+  watch(selectedChatId, (id) => {
+    closeStream()
+    if (id) {
+      openStream(id)
+    }
+  })
+
+  onBeforeUnmount(() => {
+    closeStream()
+  })
+
+  watch(() => selectedConversation.value?.messages.length, () => {
+    scrollToBottomSoon()
+  })
+
+  watch(chatList, () => {
+    startRealtime()
+  })
+
+  startRealtime()
 }
 
 function formatListTime(value?: string) {

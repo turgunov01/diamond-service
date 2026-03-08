@@ -1,3 +1,4 @@
+import { createClient, type RealtimeChannel } from '@supabase/supabase-js'
 import { getSupabaseServerConfig, getSupabaseServerHeaders } from '../../../utils/supabase'
 
 type MessageRow = {
@@ -26,9 +27,13 @@ export default eventHandler(async (event) => {
 
   const { url, serviceRoleKey } = getSupabaseServerConfig()
   const headers = getSupabaseServerHeaders(serviceRoleKey)
+  const supabase = createClient(url, serviceRoleKey, {
+    realtime: { params: { eventsPerSecond: 10 } }
+  })
 
   const querySince = getQuery(event).since
   let lastCreatedAt = typeof querySince === 'string' && querySince.length ? querySince : null
+  let channel: RealtimeChannel | null = null
 
   const write = (payload: unknown) => {
     // @ts-expect-error write is available in Node response
@@ -37,7 +42,7 @@ export default eventHandler(async (event) => {
 
   write({ type: 'ready', chatId })
 
-  async function poll() {
+  async function backfill() {
     try {
       const query: Record<string, string> = {
         select: 'id,chat_id,author_id,content,created_at,external_id,direction,status',
@@ -57,7 +62,6 @@ export default eventHandler(async (event) => {
 
       if (!rows.length) return
 
-      // newest first; we want chronological for UI
       rows.reverse()
 
       for (const row of rows) {
@@ -77,20 +81,68 @@ export default eventHandler(async (event) => {
         })
       }
     } catch (err) {
-      write({ type: 'error', message: (err as Error)?.message || 'poll_failed' })
+      write({ type: 'error', message: (err as Error)?.message || 'backfill_failed' })
     }
   }
 
-  // keep-alive to prevent proxies from closing the stream
-  const keepAlive = setInterval(() => write({ type: 'ping', ts: Date.now() }), 15000)
-  const pollTimer = setInterval(poll, 1000)
+  channel = supabase.channel(`chat-messages-${chatId}`)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'chat_messages',
+      filter: `chat_id=eq.${chatId}`
+    }, (payload) => {
+      const row = payload.new as MessageRow
+      lastCreatedAt = row.created_at
+      write({
+        type: 'message',
+        chatId: row.chat_id,
+        message: {
+          id: row.id,
+          authorId: row.author_id,
+          text: row.content,
+          createdAt: row.created_at,
+          externalId: row.external_id || undefined,
+          direction: (row.direction as 'in' | 'out' | null) || 'in',
+          status: (row.status as 'sent' | 'delivered' | 'error' | null) || 'sent'
+        }
+      })
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE',
+      schema: 'public',
+      table: 'chat_messages',
+      filter: `chat_id=eq.${chatId}`
+    }, (payload) => {
+      const row = payload.new as MessageRow
+      write({
+        type: 'message',
+        chatId: row.chat_id,
+        message: {
+          id: row.id,
+          authorId: row.author_id,
+          text: row.content,
+          createdAt: row.created_at,
+          externalId: row.external_id || undefined,
+          direction: (row.direction as 'in' | 'out' | null) || 'in',
+          status: (row.status as 'sent' | 'delivered' | 'error' | null) || 'sent'
+        }
+      })
+    })
 
-  // initial fetch to send any missed messages
-  await poll()
+  await channel.subscribe()
+
+  const keepAlive = setInterval(() => write({ type: 'ping', ts: Date.now() }), 15000)
+
+  await backfill()
 
   const close = () => {
+    if (channel) {
+      supabase.removeChannel(channel)
+      channel = null
+    }
     clearInterval(keepAlive)
-    clearInterval(pollTimer)
+    supabase.removeAllChannels()
     // @ts-expect-error Node response exists in Nitro
     event.node.res.end?.()
   }
