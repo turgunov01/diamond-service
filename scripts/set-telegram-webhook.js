@@ -12,6 +12,8 @@ import 'dotenv/config'
 const token = process.env.TELEGRAM_BOT_TOKEN
 const url = process.env.TELEGRAM_WEBHOOK_URL
 const secret = process.env.TELEGRAM_WEBHOOK_SECRET
+  ? process.env.TELEGRAM_WEBHOOK_SECRET.split(',').map(s => s.trim()).filter(Boolean)[0]
+  : undefined
 const allowedUpdates = process.env.TELEGRAM_ALLOWED_UPDATES
   ? JSON.parse(process.env.TELEGRAM_ALLOWED_UPDATES)
   : ['message', 'my_chat_member']

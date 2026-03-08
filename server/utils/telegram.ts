@@ -2,6 +2,8 @@ import type { H3Event } from 'h3'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
+  ? process.env.TELEGRAM_WEBHOOK_SECRET.split(',').map(s => s.trim()).filter(Boolean)
+  : []
 const DEFAULT_OBJECT_ID = Number(process.env.TELEGRAM_DEFAULT_OBJECT_ID || NaN)
 
 function assertBotToken() {
@@ -22,9 +24,9 @@ export async function sendTelegramMessage(tgChatId: number, text: string) {
 }
 
 export function verifyTelegramSecret(event: H3Event) {
-  if (!WEBHOOK_SECRET) return true
+  if (!WEBHOOK_SECRET.length) return true
   const header = getHeader(event, 'x-telegram-bot-api-secret-token')
-  return header === WEBHOOK_SECRET
+  return !!header && WEBHOOK_SECRET.includes(header)
 }
 
 export function getDefaultObjectId(): number {
