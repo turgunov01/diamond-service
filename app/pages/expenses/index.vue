@@ -38,6 +38,9 @@ const toast = useToast()
 const createModalOpen = ref(false)
 const creating = ref(false)
 const updatingId = ref<number | null>(null)
+const deleteModalOpen = ref(false)
+const deletingId = ref<number | null>(null)
+const expenseToDelete = ref<ExpenseRecord | null>(null)
 
 const newExpense = reactive<CreateExpenseState>({
   title: '',
@@ -75,7 +78,7 @@ const { data, error, refresh, execute, status, pending } = await useFetch<Expens
   query: {
     objectId: computed(() => activeObject.value?.id)
   },
-  immediate: false
+  immediate: true
 })
 
 const isLoading = computed(() => pending.value || status.value === 'pending')
@@ -219,6 +222,33 @@ async function setStatus(item: ExpenseRecord, status: ExpenseStatus) {
     updatingId.value = null
   }
 }
+
+function confirmDelete(item: ExpenseRecord) {
+  expenseToDelete.value = item
+  deleteModalOpen.value = true
+}
+
+async function deleteExpense() {
+  if (!expenseToDelete.value) return
+  if (deletingId.value) return
+
+  deletingId.value = expenseToDelete.value.id
+  try {
+    await $fetch(`/api/expenses/${expenseToDelete.value.id}`, { method: 'DELETE' })
+    toast.add({ title: 'Закупка удалена', color: 'success' })
+    deleteModalOpen.value = false
+    expenseToDelete.value = null
+    await refresh()
+  } catch (err: unknown) {
+    toast.add({
+      title: 'Не удалось удалить',
+      description: getErrorMessage(err) || 'Попробуйте позже.',
+      color: 'error'
+    })
+  } finally {
+    deletingId.value = null
+  }
+}
 </script>
 
 <template>
@@ -336,6 +366,12 @@ async function setStatus(item: ExpenseRecord, status: ExpenseStatus) {
                           label: 'Отметить как оплачено',
                           icon: 'i-lucide-wallet',
                           onSelect: () => setStatus(item, 'paid')
+                        },
+                        {
+                          label: 'Удалить',
+                          icon: 'i-lucide-trash',
+                          color: 'error',
+                          onSelect: () => confirmDelete(item)
                         }
                       ]"
                       :content="{ align: 'end' }"
@@ -407,6 +443,38 @@ async function setStatus(item: ExpenseRecord, status: ExpenseStatus) {
                 label="Сохранить"
                 :loading="creating"
                 @click="createExpense"
+              />
+            </div>
+          </div>
+        </template>
+      </UModal>
+
+      <UModal
+        v-model:open="deleteModalOpen"
+        title="Удалить расход?"
+        description="При удалении запись удаляется с сервера без возможности восстановления."
+        :ui="{ width: 'sm:max-w-md' }"
+      >
+        <template #body>
+          <div class="space-y-3">
+            <p class="text-sm text-muted">
+              Вы уверены, что хотите удалить расход
+              <strong>{{ expenseToDelete?.title }}</strong>?
+            </p>
+            <div class="flex items-center justify-end gap-2">
+              <UButton
+                label="Отмена"
+                color="neutral"
+                variant="subtle"
+                :disabled="deletingId !== null"
+                @click="deleteModalOpen = false"
+              />
+              <UButton
+                label="Удалить"
+                color="error"
+                icon="i-lucide-trash"
+                :loading="deletingId !== null"
+                @click="deleteExpense"
               />
             </div>
           </div>

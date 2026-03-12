@@ -45,9 +45,24 @@ const links: SidebarLinks = [
       to: '/chats'
     },
     {
-      label: 'Закупки',
-      icon: 'i-lucide-shopping-cart',
-      to: '/expenses'
+      label: 'Отчеты',
+      icon: 'i-lucide-bar-chart-3',
+      to: '/reports',
+      type: 'trigger',
+      children: [
+        {
+          label: 'Закупки',
+          to: '/expenses'
+        },
+        {
+          label: 'Отходы',
+          to: '/waste'
+        },
+        {
+          label: 'Арома-диффузоры',
+          to: '/reports/aroma'
+        }
+      ]
     },
     {
       label: 'Настройки',

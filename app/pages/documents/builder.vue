@@ -1,246 +1,148 @@
 <script setup lang="ts">
+import { nextTick, onMounted, onBeforeUnmount } from 'vue'
+
 definePageMeta({
+  title: 'Word редактор договора',
   ssr: false
 })
 
-type GrapesEditor = {
-  getHtml: () => string
-  getCss: () => string
-  getProjectData: () => unknown
-  loadProjectData: (data: unknown) => void
-  setComponents: (components: string) => void
-  setStyle: (style: string) => void
-  destroy: () => void
-  BlockManager?: {
-    getAll?: () => { forEach?: (callback: (block: { getId?: () => string, id?: string }) => void) => void }
-    add?: (id: string, options: {
-      label: string
-      category?: string
-      content: string
-      attributes?: Record<string, string>
-    }) => void
-    remove?: (id: string) => void
-  }
-}
+type ActiveObject = { id: number, name: string }
 
-interface TemplatePayload {
+interface TemplateRecord {
   id: number
   name: string
   description?: string
   contractType: string
   html: string
   css: string
-  projectData?: {
-    html?: string
-    css?: string
-    projectData?: unknown
-  }
-}
-
-interface TemplateBlockItem {
-  id: number
-  name: string
-  description?: string
-  contractType: string
-  html: string
-  css: string
-}
-
-type ActiveObject = {
-  id: number
-  name: string
 }
 
 const toast = useToast()
 const route = useRoute()
 const router = useRouter()
+
 const activeObject = useState<ActiveObject | null>('active-object', () => null)
 const activeObjectIdCookie = useCookie<number | null>('active-object-id', { default: () => null })
-
-useHead({
-  link: [
-    {
-      rel: 'stylesheet',
-      href: 'https://unpkg.com/grapesjs/dist/css/grapes.min.css'
-    }
-  ]
-})
-
-const editorRoot = ref<HTMLElement | null>(null)
-const editor = ref<GrapesEditor | null>(null)
-
-const templateName = ref('Новый шаблон')
-const templateDescription = ref('')
-const contractType = ref('gph')
-const docPreviewBg = ref(
-  'radial-gradient(circle at 25px 25px, #eef2ff 0, #eef2ff 4px, transparent 4px), linear-gradient(90deg, #f8fafc 1px, transparent 1px), linear-gradient(180deg, #f8fafc 1px, transparent 1px)'
-)
+const objectId = computed(() => activeObject.value?.id ?? activeObjectIdCookie.value ?? null)
 
 const loading = ref(false)
 const saving = ref(false)
 
-const objectId = computed(() => activeObject.value?.id ?? activeObjectIdCookie.value ?? null)
-const hasObjectScope = computed(() => Boolean(objectId.value))
+const templateName = ref('Новый шаблон')
+const templateDescription = ref('')
+const contractType = ref<'gph' | 'official'>('gph')
 
-const {
-  data: templateLibrary,
-  refresh: refreshTemplateLibrary,
-  status: templateLibraryStatus
-} = await useAsyncData<TemplateBlockItem[]>(
-  'document-template-library',
-  () => {
-    if (!objectId.value) {
-      return Promise.resolve([])
-    }
+const defaultHtml = `<h1 style="margin-bottom:12px;">Договор</h1>
+<p style="margin-bottom:12px;">Здравствуйте, {{employee_name}}!</p>
+<p style="margin-bottom:12px;">Объект: {{object_name}}</p>
+<p style="margin-bottom:12px;">Сумма: {{amount}}</p>
+<p style="margin-bottom:12px;">Дата: {{date}}</p>`
 
-    return $fetch('/api/documents/templates', {
-      query: {
-        objectId: objectId.value
-      }
-    })
-  },
-  {
-    default: () => [],
-    watch: [objectId],
-    immediate: false
-  }
-)
+const defaultCss = `body { font-family: "Segoe UI", Arial, sans-serif; line-height: 1.6; color: #111827; }
+h1, h2, h3 { color: #0f172a; font-weight: 700; }
+p { margin: 0 0 12px; }
+ul, ol { margin: 0 0 12px 22px; }
+table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+table td, table th { border: 1px solid #e5e7eb; padding: 6px 8px; }`
+
+const htmlBody = ref(defaultHtml)
+const cssBody = ref(defaultCss)
+const editorRef = ref<HTMLElement | null>(null)
+const lastSavedAt = ref<string | null>(null)
+
+const templateVariables = [
+  { label: 'Имя сотрудника', token: '{{employee_name}}' },
+  { label: 'Телефон', token: '{{phone}}' },
+  { label: 'Должность', token: '{{position}}' },
+  { label: 'Объект', token: '{{object_name}}' },
+  { label: 'Сумма', token: '{{amount}}' },
+  { label: 'Дата', token: '{{date}}' }
+]
 
 const currentTemplateId = computed(() => {
   const raw = route.query.templateId
   const value = Array.isArray(raw) ? raw[0] : raw
   const id = Number(value)
-
   return Number.isInteger(id) && id > 0 ? id : null
 })
 
-function getErrorMessage(error: unknown) {
-  if (error && typeof error === 'object') {
-    const err = error as { data?: { statusMessage?: string }, message?: string }
-    return err.data?.statusMessage || err.message
-  }
-
-  return undefined
-}
-
-const availableTemplateBlocks = computed(() =>
-  (templateLibrary.value || []).filter(template => template.id !== currentTemplateId.value)
-)
-
-function syncTemplateBlocks() {
-  const blockManager = editor.value?.BlockManager
-  if (!blockManager?.getAll || !blockManager.add || !blockManager.remove) {
-    return
-  }
-
-  const existingBlocks = blockManager.getAll()
-  existingBlocks?.forEach?.((block) => {
-    const id = typeof block.getId === 'function' ? block.getId() : block.id
-    if (id?.startsWith('template-block-')) {
-      blockManager.remove?.(id)
+function syncEditorHtml(value?: string) {
+  const content = value ?? htmlBody.value
+  nextTick(() => {
+    if (editorRef.value) {
+      editorRef.value.innerHTML = content
     }
   })
-
-  availableTemplateBlocks.value.forEach((template) => {
-    blockManager.add?.(`template-block-${template.id}`, {
-      label: `${template.name} (${template.contractType.toUpperCase()})`,
-      category: 'Шаблоны',
-      content: `${template.html}${template.css ? `<style>${template.css}</style>` : ''}`,
-      attributes: {
-        class: 'gjs-block-section'
-      }
-    })
-  })
 }
 
-async function initEditor() {
-  if (!import.meta.client || !editorRoot.value || editor.value) {
-    return
-  }
-
-  const grapesjs = (await import('grapesjs')).default
-
-  editor.value = grapesjs.init({
-    container: editorRoot.value,
-    fromElement: false,
-    height: '70vh',
-    storageManager: false,
-    blockManager: {
-      appendTo: '#gjs-blocks'
-    },
-    styleManager: {
-      appendTo: '#gjs-styles'
-    },
-    layerManager: {
-      appendTo: '#gjs-layers'
-    },
-    panels: {
-      defaults: []
-    }
-  }) as unknown as GrapesEditor
-
-  editor.value.setComponents(`
-    <section style="padding: 24px; font-family: Arial, sans-serif;">
-      <h1>Договор</h1>
-      <p>ФИО сотрудника: {{employee_name}}</p>
-      <p>Номер телефона: {{phone_number}}</p>
-      <p>Дата: {{date}}</p>
-    </section>
-  `)
-
-  editor.value.setStyle(`
-    body {
-      margin: 0;
-      background: #f7f8fa;
-      color: #111827;
-    }
-  `)
-
-  syncTemplateBlocks()
-}
-
-function applyTemplateToEditor(template: TemplatePayload) {
-  templateName.value = template.name
-  templateDescription.value = template.description || ''
-  contractType.value = template.contractType || 'gph'
-
-  const project = template.projectData
-
-  if (project?.projectData && editor.value) {
-    editor.value.loadProjectData(project.projectData)
-    return
-  }
-
-  if (editor.value) {
-    editor.value.setComponents(project?.html || template.html || '')
-    editor.value.setStyle(project?.css || template.css || '')
+function handleEditorInput() {
+  if (editorRef.value) {
+    htmlBody.value = editorRef.value.innerHTML
   }
 }
 
-async function loadTemplate() {
-  if (!currentTemplateId.value || !editor.value || !objectId.value) {
+function exec(command: string, value?: string) {
+  if (!process.client) return
+  if (editorRef.value) editorRef.value.focus()
+  document.execCommand(command, false, value)
+  handleEditorInput()
+}
+
+function insertToken(token: string) {
+  if (!process.client) {
+    htmlBody.value += token
     return
   }
+  const el = editorRef.value
+  if (!el) {
+    htmlBody.value += token
+    return
+  }
+  el.focus()
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount) {
+    el.innerHTML += token
+    handleEditorInput()
+    return
+  }
+  const range = sel.getRangeAt(0)
+  range.deleteContents()
+  const textNode = document.createTextNode(token)
+  range.insertNode(textNode)
+  range.setStartAfter(textNode)
+  range.setEndAfter(textNode)
+  sel.removeAllRanges()
+  sel.addRange(range)
+  handleEditorInput()
+}
 
+function resetTemplate() {
+  templateName.value = 'Новый шаблон'
+  templateDescription.value = ''
+  contractType.value = 'gph'
+  htmlBody.value = defaultHtml
+  cssBody.value = defaultCss
+  syncEditorHtml(defaultHtml)
+}
+
+async function loadTemplate(id: number) {
+  if (!objectId.value) return
   loading.value = true
-
   try {
-    const template = await $fetch<TemplatePayload>(`/api/documents/templates/${currentTemplateId.value}`, {
-      query: {
-        objectId: objectId.value
-      }
+    const tpl = await $fetch<TemplateRecord>(`/api/documents/templates/${id}`, {
+      query: { objectId: objectId.value }
     })
-    applyTemplateToEditor(template)
-
-    toast.add({
-      title: 'Шаблон загружен',
-      description: `ID: ${template.id}`,
-      color: 'success'
-    })
-  } catch (error: unknown) {
+    templateName.value = tpl.name
+    templateDescription.value = tpl.description || ''
+    contractType.value = (tpl.contractType as 'gph' | 'official') || 'gph'
+    htmlBody.value = tpl.html || defaultHtml
+    cssBody.value = tpl.css || defaultCss
+    lastSavedAt.value = new Date().toISOString()
+    syncEditorHtml(tpl.html || defaultHtml)
+  } catch (err) {
     toast.add({
       title: 'Не удалось загрузить шаблон',
-      description: getErrorMessage(error) || 'Проверьте API шаблонов.',
+      description: (err as any)?.data?.statusMessage || (err as Error)?.message,
       color: 'error'
     })
   } finally {
@@ -248,63 +150,42 @@ async function loadTemplate() {
   }
 }
 
+watch(currentTemplateId, (id) => {
+  if (id) loadTemplate(id)
+  else syncEditorHtml()
+}, { immediate: true })
+
 async function saveTemplate() {
-  if (!editor.value || saving.value || !objectId.value) {
+  if (saving.value) return
+  if (!objectId.value) {
+    toast.add({ title: 'Выберите объект', description: 'Нельзя сохранить без объекта', color: 'warning' })
     return
   }
-
-  const normalizedName = templateName.value.trim()
-  if (!normalizedName) {
-    toast.add({
-      title: 'Введите название шаблона',
-      color: 'warning'
-    })
-    return
-  }
-
   saving.value = true
-
   try {
     const payload = {
       objectId: objectId.value,
-      name: normalizedName,
+      name: templateName.value.trim(),
       description: templateDescription.value.trim(),
       contractType: contractType.value,
-      html: editor.value.getHtml(),
-      css: editor.value.getCss(),
-      projectData: editor.value.getProjectData()
+      html: htmlBody.value,
+      css: cssBody.value,
+      projectData: null
     }
 
     if (currentTemplateId.value) {
-      await $fetch(`/api/documents/templates/${currentTemplateId.value}`, {
-        method: 'PUT',
-        body: payload
-      })
+      await $fetch(`/api/documents/templates/${currentTemplateId.value}`, { method: 'PUT', body: payload })
     } else {
-      const created = await $fetch<{ id: number }>('/api/documents/templates', {
-        method: 'POST',
-        body: payload
-      })
-
-      await router.replace({
-        path: '/documents/builder',
-        query: {
-          templateId: String(created.id)
-        }
-      })
+      const created = await $fetch<{ id: number }>('/api/documents/templates', { method: 'POST', body: payload })
+      await router.replace({ query: { templateId: created.id } })
     }
 
-    await refreshTemplateLibrary()
-    syncTemplateBlocks()
-
-    toast.add({
-      title: 'Шаблон сохранен в Supabase',
-      color: 'success'
-    })
-  } catch (error: unknown) {
+    lastSavedAt.value = new Date().toISOString()
+    toast.add({ title: 'Шаблон сохранён', color: 'success' })
+  } catch (err) {
     toast.add({
       title: 'Не удалось сохранить шаблон',
-      description: getErrorMessage(error) || 'Проверьте API и повторите попытку.',
+      description: (err as any)?.data?.statusMessage || (err as Error)?.message,
       color: 'error'
     })
   } finally {
@@ -312,200 +193,140 @@ async function saveTemplate() {
   }
 }
 
-onMounted(async () => {
-  await initEditor()
+function formatDate(value?: string | null) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
-  if (currentTemplateId.value && objectId.value) {
-    await loadTemplate()
+const saveShortcut = (e: KeyboardEvent) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    saveTemplate()
   }
+}
+
+onMounted(() => {
+  syncEditorHtml()
+  if (!process.client) return
+  window.addEventListener('keydown', saveShortcut)
 })
-
-watch(objectId, async (value) => {
-  if (!value) {
-    return
-  }
-
-  await refreshTemplateLibrary()
-}, { immediate: true })
-
-watch(availableTemplateBlocks, () => {
-  syncTemplateBlocks()
-})
-
-watch([objectId, currentTemplateId], async ([nextObjectId]) => {
-  if (!nextObjectId || !currentTemplateId.value || !editor.value) {
-    return
-  }
-
-  await loadTemplate()
-}, { immediate: true })
 
 onBeforeUnmount(() => {
-  editor.value?.destroy()
-  editor.value = null
+  if (!process.client) return
+  window.removeEventListener('keydown', saveShortcut)
 })
 </script>
 
 <template>
-  <UDashboardPanel id="documents-builder">
-    <template #header>
-      <UDashboardNavbar title="Конструктор шаблона">
-        <template #leading>
-          <UDashboardSidebarCollapse />
-        </template>
+  <UDashboardPage>
+    <UDashboardPanel>
+      <template #header>
+        <UDashboardNavbar :title="currentTemplateId ? 'Редактор шаблона' : 'Новый шаблон'">
+          <template #leading>
+            <UDashboardSidebarCollapse />
+          </template>
+          <template #right>
+            <UButton icon="i-lucide-save" :loading="saving" label="Сохранить" @click="saveTemplate" />
+          </template>
+        </UDashboardNavbar>
+      </template>
 
-        <template #right>
-          <div class="flex items-center gap-2">
-            <UBadge
-              v-if="activeObject"
-              :label="activeObject.name"
-              color="neutral"
-              variant="subtle"
-            />
-            <UButton
-              label="К списку"
-              icon="i-lucide-arrow-left"
-              color="neutral"
-              variant="outline"
-              @click="navigateTo('/documents')"
-            />
-            <UButton
-              label="Загрузить"
-              icon="i-lucide-download"
-              color="neutral"
-              variant="outline"
-              :loading="loading"
-              :disabled="!currentTemplateId || !hasObjectScope"
-              @click="loadTemplate"
-            />
-            <UButton
-              label="Сохранить"
-              icon="i-lucide-save"
-              :disabled="!hasObjectScope"
-              :loading="saving"
-              @click="saveTemplate"
-            />
-          </div>
-        </template>
-      </UDashboardNavbar>
-    </template>
+      <template #body>
+        <div class="grid gap-6 lg:grid-cols-[1.4fr_0.6fr] items-start">
+          <section class="space-y-3">
+            <div class="flex flex-wrap items-center gap-2 rounded-lg border border-default bg-elevated/50 p-3">
+              <UButton size="xs" icon="i-lucide-bold" variant="ghost" @click="exec('bold')" />
+              <UButton size="xs" icon="i-lucide-italic" variant="ghost" @click="exec('italic')" />
+              <UButton size="xs" icon="i-lucide-underline" variant="ghost" @click="exec('underline')" />
+              <UButton size="xs" icon="i-lucide-strikethrough" variant="ghost" @click="exec('strikeThrough')" />
+              <UButton size="xs" icon="i-lucide-heading-1" variant="ghost" @click="exec('formatBlock', 'h1')" />
+              <UButton size="xs" icon="i-lucide-heading-2" variant="ghost" @click="exec('formatBlock', 'h2')" />
+              <UButton size="xs" icon="i-lucide-paragraph" variant="ghost" @click="exec('formatBlock', 'p')" />
+              <UButton size="xs" icon="i-lucide-align-left" variant="ghost" @click="exec('justifyLeft')" />
+              <UButton size="xs" icon="i-lucide-align-center" variant="ghost" @click="exec('justifyCenter')" />
+              <UButton size="xs" icon="i-lucide-align-right" variant="ghost" @click="exec('justifyRight')" />
+              <UButton size="xs" icon="i-lucide-list" variant="ghost" @click="exec('insertUnorderedList')" />
+              <UButton size="xs" icon="i-lucide-list-ordered" variant="ghost" @click="exec('insertOrderedList')" />
+              <UButton size="xs" icon="i-lucide-quote" variant="ghost" @click="exec('formatBlock', 'blockquote')" />
+              <UButton size="xs" icon="i-lucide-link" variant="ghost" @click="() => { const url = prompt('Ссылка'); if (url) exec('createLink', url) }" />
+              <UButton size="xs" icon="i-lucide-undo-2" variant="ghost" @click="exec('undo')" />
+              <UButton size="xs" icon="i-lucide-redo-2" variant="ghost" @click="exec('redo')" />
+              <UButton size="xs" icon="i-lucide-eraser" color="warning" variant="ghost" @click="exec('removeFormat')" />
+              <UButton size="xs" icon="i-lucide-refresh-ccw" color="neutral" variant="outline" @click="resetTemplate" label="Сброс" />
+              <span class="text-[11px] text-muted ml-auto">Ctrl/Cmd + S сохраняет</span>
+            </div>
 
-    <template #body>
-      <div class="space-y-4">
-        <UAlert
-          v-if="!hasObjectScope"
-          color="warning"
-          variant="subtle"
-          title="Объект не выбран"
-          description="Выберите объект в верхнем меню. Шаблоны создаются и редактируются только внутри объекта."
-        />
+            <div class="rounded-2xl border border-default bg-gradient-to-br from-elevated/60 to-elevated/30 p-4 shadow-sm">
+              <div class="text-xs text-muted flex items-center justify-between mb-2">
+                <span>Рабочая область</span>
+                <span v-if="lastSavedAt">Сохранено: {{ formatDate(lastSavedAt) }}</span>
+              </div>
+              <div class="max-w-[860px] mx-auto bg-white text-black rounded-xl shadow-xl border border-default/70">
+                <div
+                  ref="editorRef"
+                  class="min-h-[640px] p-8 focus:outline-none prose max-w-none"
+                  contenteditable="true"
+                  spellcheck="true"
+                  :style="{ fontFamily: 'Segoe UI, Arial, sans-serif' }"
+                  @input="handleEditorInput"
+                ></div>
+              </div>
+              <p class="text-xs text-muted mt-2">Переменные будут подставлены при отправке сотруднику.</p>
+              <UAlert v-if="loading" color="info" variant="subtle" title="Загрузка шаблона" class="mt-2" />
+            </div>
+          </section>
 
-        <div class="grid gap-4 xl:grid-cols-[320px_minmax(640px,1fr)_320px] items-start">
-          <div class="space-y-4">
-            <div class="rounded-lg border border-default p-4 space-y-3 bg-elevated/40 backdrop-blur">
-              <UFormField label="Название шаблона">
-                <UInput v-model="templateName" class="w-full" :disabled="!hasObjectScope" />
+          <aside class="space-y-4">
+            <div class="rounded-lg border border-default bg-elevated/50 p-4 space-y-3">
+              <h3 class="font-semibold text-highlighted">Шаблон</h3>
+              <UFormField label="Название">
+                <UInput v-model="templateName" placeholder="Договор ГПХ" />
               </UFormField>
-
               <UFormField label="Тип договора">
-                <USelect
-                  v-model="contractType"
-                  :items="[
-                    { label: 'ГПХ', value: 'gph' },
-                    { label: 'NDA', value: 'nda' },
-                    { label: 'Оффер', value: 'offer' },
-                    { label: 'Прочее', value: 'other' }
-                  ]"
-                  value-key="value"
-                  class="w-full"
-                  :disabled="!hasObjectScope"
-                />
+                <USelect v-model="contractType" :items="[
+                  { label: 'ГПХ', value: 'gph' },
+                  { label: 'Официальное трудоустройство', value: 'official' }
+                ]" />
               </UFormField>
-
               <UFormField label="Описание">
-                <UTextarea
-                  v-model="templateDescription"
-                  class="w-full"
-                  :rows="4"
-                  :disabled="!hasObjectScope"
-                />
+                <UTextarea v-model="templateDescription" :rows="2" placeholder="Короткое описание" />
               </UFormField>
+              <div class="flex gap-2">
+                <UButton icon="i-lucide-save" :loading="saving" :disabled="!objectId" label="Сохранить" class="flex-1" @click="saveTemplate" />
+                <UButton icon="i-lucide-undo-2" color="neutral" variant="outline" label="Сброс" @click="resetTemplate" />
+              </div>
+              <p v-if="!objectId" class="text-xs text-warning">Выберите объект в шапке, чтобы сохранить.</p>
+            </div>
 
-              <div class="rounded-md border border-dashed border-default px-3 py-2 text-xs text-muted">
-                Шаблон сохраняется в таблицу `document_templates` и привязывается к текущему объекту.
+            <div class="rounded-lg border border-default bg-elevated/40 p-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="font-semibold text-highlighted">Переменные</h3>
+                <span class="text-xs text-muted">Клик для вставки</span>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <UButton
+                  v-for="token in templateVariables"
+                  :key="token.token"
+                  size="xs"
+                  variant="soft"
+                  color="neutral"
+                  :label="token.label"
+                  @click="insertToken(token.token)"
+                />
               </div>
             </div>
-          </div>
 
-          <div class="rounded-xl border border-default bg-elevated/20 p-4">
-            <div class="doc-shell">
-              <div
-                class="doc-sheet"
-                :style="{ backgroundImage: docPreviewBg }"
-              >
-                <div ref="editorRoot" class="h-full w-full" />
+            <div class="rounded-lg border border-default bg-elevated/40 p-4 space-y-2">
+              <div class="flex items-center justify-between">
+                <h3 class="font-semibold text-highlighted">Стили страницы</h3>
+                <span class="text-xs text-muted">Необязательно</span>
               </div>
+              <UTextarea v-model="cssBody" class="font-mono text-xs" :rows="6" />
+              <p class="text-xs text-muted">CSS попадёт в шаблон и будет применён при отправке.</p>
             </div>
-          </div>
-
-          <div class="space-y-3">
-            <div class="rounded-lg border border-default bg-elevated/30 p-3">
-              <div class="flex items-center justify-between pb-2">
-                <p class="text-sm font-semibold text-highlighted">
-                  Блоки
-                </p>
-                <UBadge :label="String(availableTemplateBlocks.length)" color="neutral" variant="subtle" />
-              </div>
-              <div id="gjs-blocks" class="max-h-[360px] overflow-auto pr-1" />
-              <p v-if="templateLibraryStatus === 'pending'" class="pt-2 text-xs text-muted">
-                Загрузка шаблонов...
-              </p>
-              <p v-else-if="!availableTemplateBlocks.length" class="pt-2 text-xs text-muted">
-                Сохраненные шаблоны текущего объекта появятся здесь как блоки.
-              </p>
-            </div>
-
-            <div class="rounded-lg border border-default bg-elevated/30 p-3">
-              <p class="text-sm font-semibold text-highlighted pb-2">
-                Слои
-              </p>
-              <div id="gjs-layers" class="max-h-[240px] overflow-auto pr-1" />
-            </div>
-
-            <div class="rounded-lg border border-default bg-elevated/30 p-3">
-              <p class="text-sm font-semibold text-highlighted pb-2">
-                Стили
-              </p>
-              <div id="gjs-styles" class="max-h-[320px] overflow-auto pr-1" />
-            </div>
-          </div>
+          </aside>
         </div>
-      </div>
-    </template>
-  </UDashboardPanel>
+      </template>
+    </UDashboardPanel>
+  </UDashboardPage>
 </template>
-
-<style scoped>
-.doc-shell {
-  display: flex;
-  justify-content: center;
-  padding: 12px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(248, 250, 252, 0.8));
-  min-height: 70vh;
-}
-
-.doc-sheet {
-  position: relative;
-  width: min(960px, 100%);
-  aspect-ratio: 210 / 297;
-  background-color: white;
-  background-size: 180px 180px;
-  background-repeat: repeat;
-  box-shadow:
-    0 10px 40px rgba(15, 23, 42, 0.14),
-    0 4px 16px rgba(15, 23, 42, 0.1);
-  border-radius: 10px;
-  overflow: hidden;
-  padding: 28px;
-}
-</style>

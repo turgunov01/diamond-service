@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { nextTick } from 'vue'
 interface Customer {
   id: number
   username: string
@@ -72,11 +73,65 @@ const selectedRecipientIds = ref<number[]>([])
 const sending = ref(false)
 const exporting = ref(false)
 const deletingId = ref<number | null>(null)
+const miniOpen = ref(false)
+const miniContent = ref('<h1>Черновик договора</h1><p>Вставьте текст или переменные.</p>')
+const miniEditor = ref<HTMLElement | null>(null)
 
 const objectId = computed(() => activeObject.value?.id ?? activeObjectIdCookie.value ?? null)
 const buildingId = computed(() => activeBuilding.value?.id ?? activeBuildingIdCookie.value ?? null)
 const objectName = computed(() => activeObject.value?.name?.trim() || '')
 const hasObjectScope = computed(() => Boolean(objectId.value))
+const miniTokens = [
+  { label: 'Имя', token: '{{employee_name}}' },
+  { label: 'Телефон', token: '{{phone}}' },
+  { label: 'Должность', token: '{{position}}' },
+  { label: 'Объект', token: '{{object_name}}' },
+  { label: 'Сумма', token: '{{amount}}' },
+  { label: 'Дата', token: '{{date}}' }
+]
+
+function focusMini() {
+  nextTick(() => miniEditor.value?.focus())
+}
+
+function runMiniCommand(command: string, value?: string) {
+  if (!process.client) return
+  focusMini()
+  document.execCommand(command, false, value)
+  miniContent.value = miniEditor.value?.innerHTML || ''
+}
+
+function insertMiniText(text: string) {
+  runMiniCommand('insertText', text)
+}
+
+function onMiniInput(event: Event) {
+  const target = event.target as HTMLElement | null
+  miniContent.value = target?.innerHTML || ''
+}
+
+function clearMini() {
+  miniContent.value = ''
+  if (miniEditor.value) miniEditor.value.innerHTML = ''
+}
+
+async function copyMini() {
+  if (!process.client) return
+  const html = miniEditor.value?.innerHTML || ''
+  await navigator.clipboard.writeText(html)
+  toast.add({ title: 'Скопировано', color: 'success' })
+}
+
+function downloadMini() {
+  const html = miniEditor.value?.innerHTML || ''
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'draft.html'
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 const tabs = [
   { label: 'Шаблоны', value: 'templates' },
@@ -121,20 +176,17 @@ const {
 } = await useAsyncData<Customer[]>(
   'documents-customers',
   () => {
-    if (!buildingId.value) {
-      return Promise.resolve([])
+    const query: Record<string, number> = {}
+    if (buildingId.value) {
+      query.buildingId = buildingId.value
     }
 
-    return $fetch('/api/customers', {
-      query: {
-        buildingId: buildingId.value
-      }
-    })
+    return $fetch('/api/customers', { query })
   },
   {
     default: () => [],
     watch: [buildingId],
-    immediate: false
+    immediate: true
   }
 )
 
@@ -181,7 +233,7 @@ const templateSelectItems = computed(() => {
 
 const availableCustomers = computed(() => {
   if (!objectName.value) {
-    return []
+    return customers.value || []
   }
 
   return (customers.value || []).filter((customer) => {
@@ -389,6 +441,17 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
     exporting.value = false
   }
 }
+
+watch(miniOpen, (open) => {
+  if (open) {
+    nextTick(() => {
+      if (miniEditor.value) {
+        miniEditor.value.innerHTML = miniContent.value
+        miniEditor.value.focus()
+      }
+    })
+  }
+})
 </script>
 
 <template>
@@ -405,6 +468,13 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
             :label="activeObject.name"
             color="neutral"
             variant="subtle"
+          />
+          <UButton
+            icon="i-lucide-file-text"
+            label="Мини Word"
+            color="neutral"
+            variant="ghost"
+            @click="miniOpen = true"
           />
         </template>
       </UDashboardNavbar>
@@ -726,6 +796,57 @@ async function exportSigned(format: 'pdf' | 'xlsx' | 'csv') {
           Загрузка документов...
         </p>
       </div>
+
+      <UModal
+        v-model:open="miniOpen"
+        title="Мини Word"
+        description="Быстрый черновик без идей."
+        size="xl"
+      >
+        <template #body>
+          <div class="space-y-4">
+            <div class="flex flex-wrap gap-2">
+              <UButton size="xs" icon="i-lucide-bold" variant="ghost" @click="runMiniCommand('bold')" />
+              <UButton size="xs" icon="i-lucide-italic" variant="ghost" @click="runMiniCommand('italic')" />
+              <UButton size="xs" icon="i-lucide-underline" variant="ghost" @click="runMiniCommand('underline')" />
+              <UButton size="xs" icon="i-lucide-heading-1" variant="ghost" @click="runMiniCommand('formatBlock', 'h1')" />
+              <UButton size="xs" icon="i-lucide-heading-2" variant="ghost" @click="runMiniCommand('formatBlock', 'h2')" />
+              <UButton size="xs" icon="i-lucide-list" variant="ghost" @click="runMiniCommand('insertUnorderedList')" />
+              <UButton size="xs" icon="i-lucide-list-ordered" variant="ghost" @click="runMiniCommand('insertOrderedList')" />
+              <UButton
+                size="xs"
+                icon="i-lucide-link"
+                variant="ghost"
+                @click="() => { const url = prompt('Ссылка'); if (url) runMiniCommand('createLink', url) }"
+              />
+              <UButton size="xs" icon="i-lucide-eraser" color="warning" variant="ghost" @click="clearMini" />
+              <UButton size="xs" icon="i-lucide-copy" color="neutral" variant="ghost" @click="copyMini" />
+              <UButton size="xs" icon="i-lucide-download" color="neutral" variant="ghost" @click="downloadMini" />
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <UBadge
+                v-for="token in miniTokens"
+                :key="token.token"
+                color="neutral"
+                variant="subtle"
+                class="cursor-pointer"
+                @click="insertMiniText(token.token)"
+              >
+                {{ token.label }}
+              </UBadge>
+            </div>
+
+            <div
+              ref="miniEditor"
+              class="prose max-w-none min-h-[320px] rounded-lg border border-default bg-white text-black p-3 outline-none focus:ring-2 focus:ring-primary"
+              contenteditable="true"
+              spellcheck="true"
+              @input="onMiniInput"
+            />
+          </div>
+        </template>
+      </UModal>
 
       <UModal
         v-model:open="sendModalOpen"

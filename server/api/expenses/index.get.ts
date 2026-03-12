@@ -21,17 +21,20 @@ export default eventHandler(async (event): Promise<ExpenseResponse> => {
 
   const objectIdRaw = getQuery(event).objectId
   const objectId = objectIdRaw ? Number(objectIdRaw) : NaN
-  if (!Number.isInteger(objectId) || objectId <= 0) {
-    throw createError({ statusCode: 400, statusMessage: 'objectId query param is required' })
+  const filterByObject = Number.isInteger(objectId) && objectId > 0
+
+const query: Record<string, string> = {
+    select: 'id,title,category,vendor,planned_amount,actual_amount,currency,due_date,status,notes,created_at,updated_at',
+    order: 'id.asc'
+  }
+
+  if (filterByObject) {
+    query.object_id = `eq.${objectId}`
   }
 
   const rows = await $fetch<ExpenseDbRow[]>(`${url}/rest/v1/expenses`, {
     headers: getSupabaseServerHeaders(serviceRoleKey),
-    query: {
-      select: 'id,title,category,vendor,planned_amount,actual_amount,currency,due_date,status,notes,created_at,updated_at',
-      object_id: `eq.${objectId}`,
-      order: 'id.desc'
-    }
+    query
   })
 
   const items = rows.map(mapExpenseDbRowToRecord)

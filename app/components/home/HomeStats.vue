@@ -90,13 +90,11 @@ const { data: expensesData, execute: executeExpenses } = await useFetch<Expenses
   query: {
     objectId: computed(() => activeObject.value?.id)
   },
-  immediate: false
+  immediate: true
 })
 
 watch(activeObject, (value) => {
-  if (value?.id) {
-    executeExpenses()
-  }
+  executeExpenses()
 }, { immediate: true })
 
 const customersCount = computed(() => {
@@ -104,12 +102,25 @@ const customersCount = computed(() => {
 })
 
 const expensesActualSelected = computed(() => {
-  if (!expensesData.value) return 0
+  if (!expensesData.value || !props.range?.start || !props.range?.end) return 0
 
-  return expensesData.value.items.reduce((sum, item) => {
-    const amount = Number(item.actualAmount ?? item.plannedAmount ?? 0)
-    return sum + convert(Number.isFinite(amount) ? amount : 0, item.currency || 'UZS', currency.value)
-  }, 0)
+  const start = new Date(props.range.start)
+  start.setHours(0, 0, 0, 0)
+  const end = new Date(props.range.end)
+  end.setHours(23, 59, 59, 999)
+
+  return expensesData.value.items
+    .filter((item) => {
+      const dateStr = item.dueDate || item.createdAt
+      const date = new Date(dateStr)
+      return date >= start && date <= end
+    })
+    .reduce((sum, item) => {
+      const amount = Number.isFinite(Number(item.actualAmount))
+        ? Number(item.actualAmount)
+        : Number(item.plannedAmount ?? 0)
+      return sum + convert(Number.isFinite(amount) ? amount : 0, item.currency || 'UZS', currency.value)
+    }, 0)
 })
 
 const stats = computed<Stat[]>(() => [

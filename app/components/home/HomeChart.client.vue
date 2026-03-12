@@ -13,13 +13,18 @@ const props = defineProps<{
 type DataRecord = {
   date: Date
   amount: number
+  items: ExpenseItem[]
 }
 
 type ExpenseItem = {
   id: number
   plannedAmount: number
   actualAmount?: number
+  dueDate?: string
+  status?: string
   currency: string
+  category?: string
+  vendor?: string
   createdAt: string
 }
 
@@ -94,28 +99,26 @@ const { data: expensesData, execute: executeExpenses } = await useFetch<Expenses
   query: {
     objectId: computed(() => activeObject.value?.id)
   },
-  immediate: false
+  immediate: true
 })
 
 watch(activeObject, (value) => {
-  if (value?.id) {
-    executeExpenses()
-  }
+  executeExpenses()
 }, { immediate: true })
 
-function revenueForItems(items: ExpenseItem[]) {
-  let planned = 0
-  let actual = 0
+function paidSumForItems(items: ExpenseItem[]) {
+  let total = 0
 
   for (const item of items) {
-    const plannedAmount = Number(item.plannedAmount)
-    const actualAmount = Number(item.actualAmount)
+    // оплачено считаем по факту если есть, иначе берём план как ориентир
+    const amount = Number.isFinite(Number(item.actualAmount))
+      ? Number(item.actualAmount)
+      : Number(item.plannedAmount)
 
-    planned += convert(Number.isFinite(plannedAmount) ? plannedAmount : 0, item.currency || 'UZS', currency.value)
-    actual += convert(Number.isFinite(actualAmount) ? actualAmount : 0, item.currency || 'UZS', currency.value)
+    total += convert(Number.isFinite(amount) ? amount : 0, item.currency || 'UZS', currency.value)
   }
 
-  return planned - actual
+  return total
 }
 
 function recompute() {
@@ -144,13 +147,15 @@ function recompute() {
 
   data.value = intervalBuilders[props.period](props.range).map(({ start, end, label }) => {
     const bucketItems = expensesData.value!.items.filter(item => {
-      const created = new Date(item.createdAt)
+      const rawDate = item.dueDate || item.createdAt
+      const created = new Date(rawDate)
       return created >= start && created <= end
     })
 
     return {
       date: label,
-      amount: revenueForItems(bucketItems)
+      amount: paidSumForItems(bucketItems),
+      items: bucketItems
     }
   })
 }
@@ -178,7 +183,19 @@ function xTicks(index: number) {
   return formatDate(data.value[index].date)
 }
 
-const template = (item: DataRecord) => `${formatDate(item.date)}: ${formatCurrency(item.amount, currency.value)}`
+const template = (item: DataRecord) => {
+  const breakdown = item.items.map(exp => {
+    const amt = Number.isFinite(Number(exp.actualAmount))
+      ? Number(exp.actualAmount)
+      : Number(exp.plannedAmount)
+    const converted = convert(Number.isFinite(amt) ? amt : 0, exp.currency || 'UZS', currency.value)
+    const category = exp.category || 'Без категории'
+    const vendor = (exp as any).vendor || 'Без поставщика'
+    return `• ${category} — ${vendor}: ${formatCurrency(converted, currency.value)}`
+  }).join('<br/>')
+
+  return `${formatDate(item.date)}<br><strong>${formatCurrency(item.amount, currency.value)}</strong><br>${breakdown}`
+}
 </script>
 
 <template>
@@ -186,7 +203,7 @@ const template = (item: DataRecord) => `${formatDate(item.date)}: ${formatCurren
     <template #header>
       <div>
         <p class="text-xs text-muted uppercase mb-1.5">
-          Revenue
+          Расходы
         </p>
         <p class="text-3xl text-highlighted font-semibold">
           {{ formatCurrency(total, currency) }}
