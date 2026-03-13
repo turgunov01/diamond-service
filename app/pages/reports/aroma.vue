@@ -60,10 +60,26 @@ const devices = computed(() => data.value?.devices || [])
 const refills = computed(() => data.value?.refills || [])
 
 const activeDevices = computed(() => devices.value.filter(d => d.active))
+
+// Подтягиваем варианты локаций из объектов API + уже сохранённых устройств
+const activeBuilding = useState<{ id: number, name: string } | null>('active-building')
+
+const { data: objectsData, refresh: refreshObjects } = await useAsyncData<{ id: number; name: string }[]>(
+  'aroma-objects',
+  () => $fetch('/api/objects', {
+    query: {
+      buildingId: activeBuilding.value?.id
+    }
+  }),
+  { default: () => [], watch: [activeBuilding] }
+)
 const locationOptions = computed(() => {
   const set = new Set<string>()
   devices.value.forEach(d => {
     if (d.location && d.location.trim()) set.add(d.location.trim())
+  })
+  ;(objectsData.value || []).forEach(o => {
+    if (o.name && o.name.trim()) set.add(o.name.trim())
   })
   return Array.from(set).map(l => ({ label: l, value: l }))
 })
@@ -131,12 +147,8 @@ async function createDevice() {
   if (creating.value) return
   creating.value = true
   try {
-    await $fetch('/rest/v1/aroma_devices', {
+    await $fetch('/api/reports/aroma/device', {
       method: 'POST',
-      headers: {
-        Prefer: 'return=representation',
-        'Content-Type': 'application/json'
-      },
       body: {
         name: createForm.name,
         location: createForm.location || null,

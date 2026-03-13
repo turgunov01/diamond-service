@@ -66,18 +66,6 @@ function encodePostgrestIn(values: number[]) {
   return `(${values.join(',')})`
 }
 
-function resolveStatus(recipientCount: number, signedCount: number): DocumentStatus {
-  if (signedCount <= 0) {
-    return 'sent'
-  }
-
-  if (signedCount >= recipientCount) {
-    return 'signed'
-  }
-
-  return 'partially_signed'
-}
-
 export default eventHandler(async (event) => {
   const payload = parseSendBody(await readBody(event))
   const { url, serviceRoleKey } = getSupabaseServerConfig()
@@ -143,12 +131,15 @@ export default eventHandler(async (event) => {
     return pinned === currentObject.name || positions.includes(currentObject.name)
   })
 
-  if (!eligibleCustomers.length) {
+  // Если привязки по объекту не нашли, используем всех получателей в рамках текущего здания.
+  const selectedCustomers = eligibleCustomers.length ? eligibleCustomers : customers
+
+  if (!selectedCustomers.length) {
     throw createError({ statusCode: 404, statusMessage: 'Recipients were not found for this object.' })
   }
 
-  const recipientIds = eligibleCustomers.map(customer => customer.id)
-  const recipientPhones = eligibleCustomers.map(customer => customer.phone_number)
+  const recipientIds = selectedCustomers.map(customer => customer.id)
+  const recipientPhones = selectedCustomers.map(customer => customer.phone_number)
   const dispatchTitle = payload.title || `${template.name} - ${new Date().toLocaleDateString('ru-RU')}`
 
   const insertedDispatchRows = await $fetch<DocumentDispatchDbRow[]>(`${url}/rest/v1/document_dispatches`, {
@@ -175,48 +166,8 @@ export default eventHandler(async (event) => {
     throw createError({ statusCode: 500, statusMessage: 'Supabase did not return dispatch row.' })
   }
 
-  const simulatedSignedCustomers = eligibleCustomers.filter((_customer, index) => index % 2 === 0)
-
-  if (simulatedSignedCustomers.length) {
-    await $fetch(`${url}/rest/v1/signed_documents`, {
-      method: 'POST',
-      headers,
-      body: simulatedSignedCustomers.map(customer => ({
-        object_id: payload.objectId,
-        dispatch_id: dispatch.id,
-        template_id: template.id,
-        employee_name: customer.username,
-        phone_number: customer.phone_number,
-        signed_at: new Date().toISOString(),
-        signed_via: 'mobile',
-        file_url: null
-      }))
-    })
-  }
-
-  const signedCount = simulatedSignedCustomers.length
-  const status = resolveStatus(recipientIds.length, signedCount)
-
-  const updatedRows = await $fetch<DocumentDispatchDbRow[]>(`${url}/rest/v1/document_dispatches`, {
-    method: 'PATCH',
-    headers: {
-      ...headers,
-      Prefer: 'return=representation'
-    },
-    query: {
-      id: `eq.${dispatch.id}`,
-      object_id: `eq.${payload.objectId}`
-    },
-    body: {
-      signed_count: signedCount,
-      status
-    }
-  })
-
-  const updatedDispatch = updatedRows[0] || dispatch
-
   return {
-    ...mapDispatchDbRowToRecord(updatedDispatch),
+    ...mapDispatchDbRowToRecord(dispatch),
     templateName: template.name
   }
 })

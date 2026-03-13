@@ -7,6 +7,7 @@ type ObjectRow = {
   description?: string | null
   address?: string | null
   code?: string | null
+  is_active?: boolean
 }
 
 export default eventHandler(async (event) => {
@@ -15,7 +16,7 @@ export default eventHandler(async (event) => {
   const buildingId = typeof buildingIdRaw === 'string' ? Number(buildingIdRaw) : NaN
 
   const query: Record<string, string> = {
-    select: 'id,building_id,name,description,address,code',
+    select: 'id,building_id,name,description,address,code,is_active',
     order: 'id.asc'
   }
 

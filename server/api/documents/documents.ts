@@ -1,5 +1,11 @@
 ﻿export type DocumentStatus = 'sent' | 'partially_signed' | 'signed'
 
+export interface DispatchRecipient {
+  id: number
+  username: string
+  phoneNumber: string
+}
+
 export interface SupabaseErrorData {
   code?: string
   message?: string
@@ -68,6 +74,7 @@ export interface DocumentDispatchRecord {
   signedCount: number
   status: DocumentStatus
   sentAt: string
+  recipients?: DispatchRecipient[]
 }
 
 export interface SignedDocumentRecord {

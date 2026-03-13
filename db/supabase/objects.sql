@@ -1,9 +1,8 @@
--- Supabase SQL: таблица объектов/зон для управления зонами
-
 create table if not exists public.objects (
   id bigint generated always as identity primary key,
   name text not null unique,
   description text,
+  is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
 

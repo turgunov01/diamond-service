@@ -43,7 +43,7 @@ export default eventHandler(async (event) => {
     }
   })
 
-  // Update bin to available and decrease weight
+  // After reporting, mark bin as available and reduce weight; volume left unchanged.
   const newWeight = Math.max(0, (bin.weight_kg ?? 0) - (Number.isFinite(amountKg) ? amountKg : 0))
 
   await $fetch(`${url}/rest/v1/waste_bins`, {

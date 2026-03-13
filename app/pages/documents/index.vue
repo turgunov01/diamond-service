@@ -30,6 +30,11 @@ interface DocumentDispatch {
   signedCount: number
   status: DispatchStatus
   sentAt: string
+  recipients?: {
+    id: number
+    username: string
+    phoneNumber: string
+  }[]
 }
 
 interface SignedDocument {
@@ -73,9 +78,13 @@ const selectedRecipientIds = ref<number[]>([])
 const sending = ref(false)
 const exporting = ref(false)
 const deletingId = ref<number | null>(null)
+const deletingSentId = ref<number | null>(null)
+const deletingSignedId = ref<number | null>(null)
 const miniOpen = ref(false)
 const miniContent = ref('<h1>Черновик договора</h1><p>Вставьте текст или переменные.</p>')
 const miniEditor = ref<HTMLElement | null>(null)
+const detailsOpen = ref(false)
+const selectedDispatchId = ref<number | null>(null)
 
 const objectId = computed(() => activeObject.value?.id ?? activeObjectIdCookie.value ?? null)
 const buildingId = computed(() => activeBuilding.value?.id ?? activeBuildingIdCookie.value ?? null)
@@ -252,6 +261,17 @@ const customerSelectItems = computed(() => {
   }))
 })
 
+const selectedDispatch = computed(() => {
+  if (!selectedDispatchId.value) return null
+  return documentsData.value?.sent.find(d => d.id === selectedDispatchId.value) || null
+})
+
+const selectedDispatchHistory = computed(() => {
+  const dispatchId = selectedDispatchId.value
+  if (!dispatchId) return []
+  return (documentsData.value?.signed || []).filter(s => s.dispatchId === dispatchId)
+})
+
 function formatDate(value: string) {
   return new Date(value).toLocaleString('ru-RU', {
     day: '2-digit',
@@ -264,7 +284,7 @@ function formatDate(value: string) {
 
 function statusLabel(statusValue: DispatchStatus) {
   if (statusValue === 'sent') {
-    return 'Отправлено'
+    return 'В ожидании подписи'
   }
 
   if (statusValue === 'partially_signed') {
@@ -298,6 +318,11 @@ function openSendModal(templateId?: number) {
   selectedTemplateId.value = templateId
   selectedRecipientIds.value = []
   sendModalOpen.value = true
+}
+
+function openDispatchDetails(id: number) {
+  selectedDispatchId.value = id
+  detailsOpen.value = true
 }
 
 function getErrorMessage(fetchError: unknown) {
@@ -406,6 +431,48 @@ async function deleteTemplate(templateId: number) {
     })
   } finally {
     deletingId.value = null
+  }
+}
+
+async function deleteDispatch(id: number) {
+  if (deletingSentId.value || !objectId.value) return
+  deletingSentId.value = id
+  try {
+    await $fetch(`/api/documents/dispatch/${id}`, {
+      method: 'DELETE',
+      query: { objectId: objectId.value }
+    })
+    toast.add({ title: 'Отправка удалена', color: 'success' })
+    await refresh()
+  } catch (fetchError: unknown) {
+    toast.add({
+      title: 'Не удалось удалить отправку',
+      description: getErrorMessage(fetchError) || 'Попробуйте позже.',
+      color: 'error'
+    })
+  } finally {
+    deletingSentId.value = null
+  }
+}
+
+async function deleteSignedDoc(id: number) {
+  if (deletingSignedId.value || !objectId.value) return
+  deletingSignedId.value = id
+  try {
+    await $fetch(`/api/documents/signed/${id}`, {
+      method: 'DELETE',
+      query: { objectId: objectId.value }
+    })
+    toast.add({ title: 'Подписанный документ удалён', color: 'success' })
+    await refresh()
+  } catch (fetchError: unknown) {
+    toast.add({
+      title: 'Не удалось удалить запись',
+      description: getErrorMessage(fetchError) || 'Попробуйте позже.',
+      color: 'error'
+    })
+  } finally {
+    deletingSignedId.value = null
   }
 }
 
@@ -620,7 +687,7 @@ watch(miniOpen, (open) => {
                     Шаблон
                   </th>
                   <th class="px-3 py-2 text-left">
-                    Получатели
+                    Сотрудники
                   </th>
                   <th class="px-3 py-2 text-left">
                     Подписано
@@ -631,13 +698,17 @@ watch(miniOpen, (open) => {
                   <th class="px-3 py-2 text-left">
                     Дата
                   </th>
+                  <th class="px-3 py-2 text-left">
+                    Действия
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr
                   v-for="dispatch in documentsData.sent"
                   :key="dispatch.id"
-                  class="border-t border-default"
+                  class="border-t border-default hover:bg-elevated/70 cursor-pointer"
+                  @click="openDispatchDetails(dispatch.id)"
                 >
                   <td class="px-3 py-2">
                     {{ dispatch.id }}
@@ -649,7 +720,18 @@ watch(miniOpen, (open) => {
                     {{ dispatch.templateName || '-' }}
                   </td>
                   <td class="px-3 py-2">
-                    {{ dispatch.recipientCount }}
+                    <div class="flex flex-wrap gap-1">
+                      <UBadge
+                        v-for="rec in dispatch.recipients || []"
+                        :key="rec?.id || rec?.username"
+                        :label="rec ? `@${rec.username}` : '—'"
+                        variant="subtle"
+                        color="neutral"
+                      />
+                    </div>
+                    <p class="text-xs text-muted mt-1">
+                      {{ dispatch.recipientCount }} чел.
+                    </p>
                   </td>
                   <td class="px-3 py-2">
                     {{ dispatch.signedCount }}
@@ -664,9 +746,19 @@ watch(miniOpen, (open) => {
                   <td class="px-3 py-2">
                     {{ formatDate(dispatch.sentAt) }}
                   </td>
+                  <td class="px-3 py-2">
+                    <UButton
+                      icon="i-lucide-trash"
+                      color="error"
+                      variant="ghost"
+                      size="xs"
+                      :loading="deletingSentId === dispatch.id"
+                      @click.stop="deleteDispatch(dispatch.id)"
+                    />
+                  </td>
                 </tr>
                 <tr v-if="!documentsData.sent.length">
-                  <td class="px-3 py-4 text-muted" colspan="7">
+                  <td class="px-3 py-4 text-muted" colspan="8">
                     Отправленных документов пока нет.
                   </td>
                 </tr>
@@ -678,7 +770,8 @@ watch(miniOpen, (open) => {
             <div
               v-for="dispatch in documentsData.sent"
               :key="dispatch.id"
-              class="rounded-lg border border-default bg-elevated/50 p-3 space-y-2"
+              class="rounded-lg border border-default bg-elevated/50 p-3 space-y-2 cursor-pointer"
+              @click="openDispatchDetails(dispatch.id)"
             >
               <div class="flex items-center justify-between gap-2">
                 <p class="font-semibold text-highlighted">
@@ -690,12 +783,30 @@ watch(miniOpen, (open) => {
                 Шаблон: {{ dispatch.templateName || '-' }}
               </p>
               <div class="flex items-center gap-3 text-sm">
-                <span>Получатели: {{ dispatch.recipientCount }}</span>
-                <span class="text-muted">Подписано: {{ dispatch.signedCount }}</span>
+                <div>
+                  <span class="font-medium">Сотрудники:</span>
+                  <span v-if="dispatch.recipients?.length" class="text-muted">
+                    {{ dispatch.recipients.map(r => `@${r.username}`).join(', ') }}
+                  </span>
+                  <span v-else class="text-muted">—</span>
+                </div>
+              </div>
+              <div class="text-xs text-muted">
+                Подписано: {{ dispatch.signedCount }} / {{ dispatch.recipientCount }}
               </div>
               <p class="text-xs text-muted">
                 Отправлено: {{ formatDate(dispatch.sentAt) }}
               </p>
+              <div class="flex justify-end">
+                <UButton
+                  icon="i-lucide-trash"
+                  color="error"
+                  variant="ghost"
+                  size="xs"
+                  :loading="deletingSentId === dispatch.id"
+                  @click.stop="deleteDispatch(dispatch.id)"
+                />
+              </div>
             </div>
           </div>
 
@@ -727,6 +838,9 @@ watch(miniOpen, (open) => {
                   <th class="px-3 py-2 text-left">
                     Дата подписи
                   </th>
+                  <th class="px-3 py-2 text-left">
+                    Действия
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -753,9 +867,19 @@ watch(miniOpen, (open) => {
                   <td class="px-3 py-2">
                     {{ formatDate(item.signedAt) }}
                   </td>
+                  <td class="px-3 py-2">
+                    <UButton
+                      icon="i-lucide-trash"
+                      color="error"
+                      variant="ghost"
+                      size="xs"
+                      :loading="deletingSignedId === item.id"
+                      @click.stop="deleteSignedDoc(item.id)"
+                    />
+                  </td>
                 </tr>
                 <tr v-if="!documentsData.signed.length">
-                  <td class="px-3 py-4 text-muted" colspan="6">
+                  <td class="px-3 py-4 text-muted" colspan="7">
                     Подписанных документов пока нет.
                   </td>
                 </tr>
@@ -784,6 +908,16 @@ watch(miniOpen, (open) => {
               <p class="text-sm text-muted">
                 Подписано через: {{ item.signedVia }}
               </p>
+              <div class="flex justify-end">
+                <UButton
+                  icon="i-lucide-trash"
+                  color="error"
+                  variant="ghost"
+                  size="xs"
+                  :loading="deletingSignedId === item.id"
+                  @click.stop="deleteSignedDoc(item.id)"
+                />
+              </div>
             </div>
           </div>
 
@@ -898,6 +1032,69 @@ watch(miniOpen, (open) => {
               />
             </div>
           </div>
+        </template>
+      </UModal>
+ 
+      <UModal
+        v-model:open="detailsOpen"
+        title="Детали отправки"
+        :description="selectedDispatch ? selectedDispatch.title : 'Сведения о получателях и ходе подписания.'"
+        size="xl"
+      >
+        <template #body>
+          <div v-if="selectedDispatch" class="space-y-4">
+            <div class="flex flex-wrap items-center gap-2 text-sm">
+              <UBadge :label="statusLabel(selectedDispatch.status)" :color="statusColor(selectedDispatch.status)" variant="subtle" />
+              <span class="text-muted">ID: {{ selectedDispatch.id }}</span>
+              <span class="text-muted">Шаблон: {{ selectedDispatch.templateName || '—' }}</span>
+              <span class="text-muted">Отправлено: {{ formatDate(selectedDispatch.sentAt) }}</span>
+            </div>
+
+            <div class="space-y-2">
+              <h4 class="font-semibold text-highlighted">Сотрудники</h4>
+              <div v-if="selectedDispatch.recipients?.length" class="flex flex-wrap gap-2">
+                <UBadge
+                  v-for="rec in selectedDispatch.recipients"
+                  :key="rec.id"
+                  :label="`@${rec.username}`"
+                  color="neutral"
+                  variant="subtle"
+                />
+              </div>
+              <p v-else class="text-sm text-muted">Получатели не найдены.</p>
+              <p class="text-xs text-muted">Подписано: {{ selectedDispatch.signedCount }} / {{ selectedDispatch.recipientCount }}</p>
+            </div>
+
+            <div class="space-y-2">
+              <h4 class="font-semibold text-highlighted">История действий</h4>
+              <div v-if="selectedDispatchHistory.length" class="rounded-lg border border-default overflow-x-auto">
+                <table class="min-w-full text-sm">
+                  <thead>
+                    <tr class="bg-elevated/50">
+                      <th class="px-3 py-2 text-left">Сотрудник</th>
+                      <th class="px-3 py-2 text-left">Телефон</th>
+                      <th class="px-3 py-2 text-left">Подписано</th>
+                      <th class="px-3 py-2 text-left">Способ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="item in selectedDispatchHistory"
+                      :key="item.id"
+                      class="border-t border-default"
+                    >
+                      <td class="px-3 py-2">{{ item.employeeName }}</td>
+                      <td class="px-3 py-2">{{ item.phoneNumber }}</td>
+                      <td class="px-3 py-2">{{ formatDate(item.signedAt) }}</td>
+                      <td class="px-3 py-2">{{ item.signedVia }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-else class="text-sm text-muted">Подписей по этой отправке пока нет.</p>
+            </div>
+          </div>
+          <div v-else class="text-sm text-muted">Выберите отправку, чтобы увидеть детали.</div>
         </template>
       </UModal>
     </template>

@@ -54,6 +54,8 @@ const {
   }
 )
 
+const isLoading = computed(() => pending.value || status.value === 'pending')
+
 const reportForm = reactive({
   binId: null as number | null,
   amountM3: 0,
@@ -123,6 +125,14 @@ function formatDate(value: string) {
     hour: '2-digit',
     minute: '2-digit'
   })
+}
+
+function statusLabel(status: BinStatus) {
+  return status === 'available' ? 'Свободен' : 'Загружен'
+}
+
+function statusColor(status: BinStatus) {
+  return status === 'available' ? 'success' : 'warning'
 }
 
 async function submitReport() {
@@ -205,7 +215,7 @@ async function createBin() {
             icon="i-lucide-refresh-ccw"
             color="neutral"
             variant="outline"
-            :loading="pending"
+            :loading="isLoading"
             @click="refresh"
             label="Обновить"
           />
@@ -245,19 +255,101 @@ async function createBin() {
           </UPageCard>
         </div>
 
-        <div class="rounded-lg border border-default bg-elevated/40 p-4 space-y-3">
-          <h3 class="font-semibold text-highlighted">По категориям</h3>
-          <div class="grid gap-3 sm:grid-cols-3">
-            <div
-              v-for="stat in categoryStats"
-              :key="stat.category"
-              class="rounded-lg border border-default bg-white/70 p-3 space-y-1"
-            >
-              <p class="font-semibold text-highlighted">{{ stat.category }}</p>
-              <p class="text-sm text-muted">Всего: {{ stat.total }} · {{ formatNumber(stat.m3) }} м³ · {{ formatNumber(stat.kg) }} кг</p>
-              <p class="text-xs text-success">Доступно: {{ stat.available }}</p>
-              <p class="text-xs text-warning">Загружено: {{ stat.loaded }}</p>
+        <div class="rounded-lg border border-default bg-elevated/30">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-default/60">
+            <h3 class="font-semibold text-highlighted">По категориям</h3>
+            <UBadge :label="categoryStats.length" variant="subtle" />
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="bg-elevated/40">
+                  <th class="px-3 py-2 text-left">Категория</th>
+                  <th class="px-3 py-2 text-left">Контейнеров</th>
+                  <th class="px-3 py-2 text-left">Доступно</th>
+                  <th class="px-3 py-2 text-left">Загружено</th>
+                  <th class="px-3 py-2 text-left">Объём, м³</th>
+                  <th class="px-3 py-2 text-left">Вес, кг</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="stat in categoryStats"
+                  :key="stat.category"
+                  class="border-t border-default"
+                >
+                  <td class="px-3 py-2 font-medium text-highlighted">{{ stat.category }}</td>
+                  <td class="px-3 py-2">{{ stat.total }}</td>
+                  <td class="px-3 py-2 text-success">{{ stat.available }}</td>
+                  <td class="px-3 py-2 text-warning">{{ stat.loaded }}</td>
+                  <td class="px-3 py-2">{{ formatNumber(stat.m3) }}</td>
+                  <td class="px-3 py-2">{{ formatNumber(stat.kg) }}</td>
+                </tr>
+                <tr v-if="!categoryStats.length">
+                  <td class="px-3 py-4 text-muted" colspan="6">
+                    Нет данных по категориям.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-default bg-elevated/30">
+          <div class="flex items-center justify-between px-4 py-3 border-b border-default/60">
+            <div>
+              <h3 class="font-semibold text-highlighted leading-tight">Контейнеры</h3>
+              <p class="text-xs text-muted">Все баки с привязкой к объекту и статусом</p>
             </div>
+            <UBadge :label="bins.length" variant="subtle" />
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="bg-elevated/40">
+                  <th class="px-3 py-2 text-left">ID</th>
+                  <th class="px-3 py-2 text-left">Объект</th>
+                  <th class="px-3 py-2 text-left">Категория</th>
+                  <th class="px-3 py-2 text-left">Объём, м³</th>
+                  <th class="px-3 py-2 text-left">Вес, кг</th>
+                  <th class="px-3 py-2 text-left">Статус</th>
+                  <th class="px-3 py-2 text-left">Создан</th>
+                  <th class="px-3 py-2 text-left">Обновлён</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template v-if="isLoading">
+                  <tr v-for="n in 5" :key="`bin-loading-${n}`" class="border-t border-default">
+                    <td class="px-3 py-3" colspan="8">
+                      <div class="h-4 w-full bg-default/50 rounded animate-pulse" />
+                    </td>
+                  </tr>
+                </template>
+                <template v-else>
+                  <tr
+                    v-for="bin in bins"
+                    :key="bin.id"
+                    class="border-t border-default"
+                  >
+                    <td class="px-3 py-2">#{{ bin.id }}</td>
+                    <td class="px-3 py-2">{{ bin.objectId ?? '—' }}</td>
+                    <td class="px-3 py-2">{{ bin.category }}</td>
+                    <td class="px-3 py-2">{{ formatNumber(bin.volumeM3) }}</td>
+                    <td class="px-3 py-2">{{ formatNumber(bin.weightKg) }}</td>
+                    <td class="px-3 py-2">
+                      <UBadge :label="statusLabel(bin.status)" :color="statusColor(bin.status)" variant="subtle" />
+                    </td>
+                    <td class="px-3 py-2">{{ formatDate(bin.createdAt) }}</td>
+                    <td class="px-3 py-2">{{ formatDate(bin.updatedAt) }}</td>
+                  </tr>
+                  <tr v-if="!bins.length">
+                    <td class="px-3 py-4 text-muted" colspan="8">
+                      Контейнеры не найдены.
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -284,37 +376,61 @@ async function createBin() {
               <UButton
                 label="Отправить отчёт"
                 icon="i-lucide-send"
-                :loading="pending"
+                :loading="isLoading"
                 @click="submitReport"
               />
             </div>
           </div>
 
-          <div class="rounded-lg border border-default bg-elevated/40 p-4 space-y-3">
-            <div class="flex items-center justify-between">
+          <div class="rounded-lg border border-default bg-elevated/30">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-default/60">
               <h3 class="font-semibold text-highlighted">История отчётов</h3>
               <UBadge :label="reports.length" variant="subtle" />
             </div>
-            <div v-if="!reports.length" class="text-sm text-muted">Отчётов пока нет.</div>
-            <div v-else class="space-y-2 max-h-[360px] overflow-auto">
-              <div
-                v-for="report in reports"
-                :key="report.id"
-                class="rounded-md border border-default bg-white/70 p-2 text-sm"
-              >
-                <p class="font-semibold text-highlighted">
-                  #{{ report.binId }} · {{ report.category }}
-                </p>
-                <p class="text-muted">
-                  {{ formatNumber(report.amountM3) }} м³ · {{ formatNumber(report.amountKg) }} кг
-                </p>
-                <p class="text-xs text-muted">{{ formatDate(report.createdAt) }}</p>
-              </div>
+            <div class="overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead>
+                  <tr class="bg-elevated/40">
+                    <th class="px-3 py-2 text-left">ID</th>
+                    <th class="px-3 py-2 text-left">Бак</th>
+                    <th class="px-3 py-2 text-left">Категория</th>
+                    <th class="px-3 py-2 text-left">Объём, м³</th>
+                    <th class="px-3 py-2 text-left">Вес, кг</th>
+                    <th class="px-3 py-2 text-left">Дата</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template v-if="isLoading">
+                    <tr v-for="n in 5" :key="`report-loading-${n}`" class="border-t border-default">
+                      <td class="px-3 py-3" colspan="6">
+                        <div class="h-4 w-full bg-default/50 rounded animate-pulse" />
+                      </td>
+                    </tr>
+                  </template>
+                  <template v-else>
+                    <tr
+                      v-for="report in reports"
+                      :key="report.id"
+                      class="border-t border-default"
+                    >
+                      <td class="px-3 py-2">#{{ report.id }}</td>
+                      <td class="px-3 py-2">#{{ report.binId }}</td>
+                      <td class="px-3 py-2">{{ report.category }}</td>
+                      <td class="px-3 py-2">{{ formatNumber(report.amountM3) }}</td>
+                      <td class="px-3 py-2">{{ formatNumber(report.amountKg) }}</td>
+                      <td class="px-3 py-2">{{ formatDate(report.createdAt) }}</td>
+                    </tr>
+                    <tr v-if="!reports.length">
+                      <td class="px-3 py-4 text-muted" colspan="6">
+                        Отчётов пока нет.
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
-
-        <p v-if="status === 'pending'" class="text-sm text-muted">Загрузка данных...</p>
       </div>
 
       <UModal

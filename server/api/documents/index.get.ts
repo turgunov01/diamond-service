@@ -10,13 +10,20 @@ import {
   type DocumentTemplateDbRow,
   type DocumentTemplateRecord,
   type SignedDocumentDbRow,
-  type SignedDocumentRecord
+  type SignedDocumentRecord,
+  type DispatchRecipient
 } from './documents'
 
 interface DocumentsResponse {
   templates: DocumentTemplateRecord[]
   sent: DocumentDispatchRecord[]
   signed: SignedDocumentRecord[]
+}
+
+interface RecipientLiteRow {
+  id: number
+  username: string
+  phone_number: string
 }
 
 function isMissingTableError(error: unknown) {
@@ -33,6 +40,10 @@ async function fetchRowsOrEmpty<T>(request: () => Promise<T[]>) {
     }
     throw error
   }
+}
+
+function encodeIn(values: number[]) {
+  return `(${values.join(',')})`
 }
 
 export default eventHandler(async (event): Promise<DocumentsResponse> => {
@@ -67,6 +78,24 @@ export default eventHandler(async (event): Promise<DocumentsResponse> => {
     }))
   ])
 
+  const allRecipientIds = Array.from(new Set(dispatchRows.flatMap(row => row.recipient_ids || [])))
+  let recipientMap = new Map<number, DispatchRecipient>()
+  if (allRecipientIds.length) {
+    const recipients = await fetchRowsOrEmpty<RecipientLiteRow>(() => $fetch<RecipientLiteRow[]>(`${url}/rest/v1/customers`, {
+      headers,
+      query: {
+        select: 'id,username,phone_number',
+        id: `in.${encodeIn(allRecipientIds)}`
+      }
+    }))
+
+    recipientMap = new Map(recipients.map(r => [r.id, {
+      id: r.id,
+      username: r.username,
+      phoneNumber: r.phone_number
+    } satisfies DispatchRecipient]))
+  }
+
   const templates = templateRows.map(mapTemplateDbRowToRecord)
   const templateNameById = new Map(templates.map(template => [template.id, template.name]))
 
@@ -74,7 +103,10 @@ export default eventHandler(async (event): Promise<DocumentsResponse> => {
     .map(mapDispatchDbRowToRecord)
     .map(dispatch => ({
       ...dispatch,
-      templateName: dispatch.templateId ? templateNameById.get(dispatch.templateId) : undefined
+      templateName: dispatch.templateId ? templateNameById.get(dispatch.templateId) : undefined,
+      recipients: dispatch.recipientIds
+        .map(id => recipientMap.get(id))
+        .filter(Boolean) as DispatchRecipient[]
     }))
 
   const signed = signedRows

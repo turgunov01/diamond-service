@@ -59,6 +59,14 @@ const links: SidebarLinks = [
           to: '/waste'
         },
         {
+          label: 'Кристаллизация',
+          to: '/reports/marble'
+        },
+        {
+          label: 'Дезинфекция',
+          to: '/reports/sanitation'
+        },
+        {
           label: 'Арома-диффузоры',
           to: '/reports/aroma'
         }
